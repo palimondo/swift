@@ -150,6 +150,22 @@ class ResultComparison(object):
                 '{0:.2f}x{1}'.format(self.ratio, self.is_dubious))
 
 
+class LogParser(object):
+    @staticmethod
+    def load_from_csv(filename):  # handles output from Benchmark_O and
+        def skip_totals(row):     # Benchmark_Driver (added MAX_RSS column)
+            return len(row) > 7 and row[0].isdigit()
+        tests = map(PerformanceTestResult,
+                    filter(skip_totals, csv.reader(open(filename))))
+
+        def add_or_merge(names, r):
+            if r.name not in names:
+                names[r.name] = r
+            else:
+                names[r.name].merge(r)
+            return names
+        return reduce(add_or_merge, tests, dict())
+
 class TestComparator(object):
     """TestComparator parses `PerformanceTestResult`s from CSV log files.
     Then it determines which tests were `added`, `removed` and which can be
@@ -161,24 +177,7 @@ class TestComparator(object):
     alphabetically. The `increased` and `decreased` lists are sorted in
     descending order by the amount of change.
     """
-    def __init__(self, old_file, new_file, delta_threshold):
-
-        def load_from_CSV(filename):  # handles output from Benchmark_O and
-            def skip_totals(row):     # Benchmark_Driver (added MAX_RSS column)
-                return len(row) > 7 and row[0].isdigit()
-            tests = map(PerformanceTestResult,
-                        filter(skip_totals, csv.reader(open(filename))))
-
-            def add_or_merge(names, r):
-                if r.name not in names:
-                    names[r.name] = r
-                else:
-                    names[r.name].merge(r)
-                return names
-            return reduce(add_or_merge, tests, dict())
-
-        old_results = load_from_CSV(old_file)
-        new_results = load_from_CSV(new_file)
+    def __init__(self, old_results, new_results, delta_threshold):
         old_tests = set(old_results.keys())
         new_tests = set(new_results.keys())
         comparable_tests = new_tests.intersection(old_tests)
@@ -405,7 +404,8 @@ def parse_args(args):
 
 def main():
     args = parse_args(sys.argv[1:])
-    comparator = TestComparator(args.old_file, args.new_file,
+    comparator = TestComparator(LogParser.load_from_csv(args.old_file),
+                                LogParser.load_from_csv(args.new_file),
                                 args.delta_threshold)
     formatter = ReportFormatter(comparator, args.old_branch, args.new_branch,
                                 args.changes_only)
