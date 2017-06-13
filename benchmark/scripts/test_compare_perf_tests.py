@@ -35,6 +35,7 @@ from compare_perf_tests import parse_args
 # just observing side effects of propper interaction between our classes here.
 # It is more pragmatic then hand-rolling all the mocks... Sorry!
 
+
 @contextmanager
 def captured_output():
     new_out, new_err = StringIO(), StringIO()
@@ -225,10 +226,54 @@ class OldAndNewLog(unittest.TestCase):
             self.assertIn(text, report)
 
 
-class TestLogParser(FileSystemIntegration):
+class TestLogParser(unittest.TestCase):
+    def test_parse_verbose_log(self):
+        """Parse multiple performance test results with 2 sample formats:
+        single line for N = 1; two lines for N > 1.
+        """
+        verbose_log = """--- DATA ---
+#,TEST,SAMPLES,MIN(us),MAX(us),MEAN(us),SD(us),MEDIAN(us)
+Running AngryPhonebook for 3 samples.
+    Measuring with scale 78.
+    Sample 0,11812
+    Measuring with scale 90.
+    Sample 1,13898
+    Measuring with scale 91.
+    Sample 2,11467
+1,AngryPhonebook,3,11467,13898,12392,1315,11812
+Running Array2D for 3 samples.
+    Sample 0,369900
+    Sample 1,381039
+    Sample 2,371043
+3,Array2D,3,369900,381039,373994,6127,371043
+
+Totals,2,381367,394937,386386,0,0"""
+        parser = LogParser()
+        benchmarks = parser.parse_results(verbose_log.split('\n'))
+
+        b = benchmarks[0]
+        self.assertEquals(
+            (b.name, b.min, b.max, int(b.mean), int(b.sd), b.median),
+            ('AngryPhonebook', 11467, 13898, 12392, 1315, 11812)
+        )
+        self.assertEquals(b.samples, len(b.all_samples))
+        self.assertEquals(benchmarks[0].all_samples,
+                          [(0, 78, 11812), (1, 90, 13898), (2, 91, 11467)])
+
+        b = benchmarks[1]
+        self.assertEquals(
+            (b.name, b.min, b.max, int(b.mean), int(b.sd), b.median),
+            ('Array2D', 369900, 381039, 373994, 6127, 371043)
+        )
+        self.assertEquals(b.samples, len(b.all_samples))
+        self.assertEquals(benchmarks[1].all_samples,
+                          [(0, 1, 369900), (1, 1, 381039), (2, 1, 371043)])
+
+
+class TestLogParserIntegration(FileSystemIntegration):
     def test_load_from_csv(self):
         """Ignores header row, empty lines and Totals row"""
-        log_file = self.write_temp_file('log.log',"""
+        log_file = self.write_temp_file('log.log', """
 #,TEST,SAMPLES,MIN(us),MAX(us),MEAN(us),SD(us),MEDIAN(us)
 34,BitCount,20,3,4,4,0,4,10192896
 
