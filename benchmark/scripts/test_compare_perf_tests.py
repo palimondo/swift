@@ -69,24 +69,6 @@ class TestPerformanceTestResult(unittest.TestCase):
             'min:10664 max:12933 mean:11035 sd:576.0 median:10884>'
         )
 
-    def test_header(self):
-        self.assertEquals(PerformanceTestResult.header,
-                          ('TEST', 'MIN', 'MAX', 'MEAN', 'MAX_RSS'))
-
-    def test_values(self):
-        log_line = '1,AngryPhonebook,20,10664,12933,11035,576,10884'
-        r = PerformanceTestResult(log_line.split(','))
-        self.assertEquals(
-            r.values(),
-            ('AngryPhonebook', '10664', '12933', '11035', '—')
-        )
-        log_line = '1,AngryPhonebook,1,12045,12045,12045,0,12045,10510336'
-        r = PerformanceTestResult(log_line.split(','))
-        self.assertEquals(
-            r.values(),
-            ('AngryPhonebook', '12045', '12045', '12045', '10510336')
-        )
-
     def test_merge(self):
         tests = """1,AngryPhonebook,1,12045,12045,12045,0,12045,10510336
 1,AngryPhonebook,1,12325,12325,12325,0,12325,10510336
@@ -148,31 +130,13 @@ class TestResultComparison(unittest.TestCase):
             ResultComparison, self.r0, self.r1
         )
 
-    def test_header(self):
-        self.assertEquals(ResultComparison.header,
-                          ('TEST', 'OLD', 'NEW', 'DELTA', 'SPEEDUP'))
-
-    def test_values(self):
-        rc = ResultComparison(self.r1, self.r2)
-        self.assertEquals(
-            rc.values(),
-            ('AngryPhonebook', '12325', '11616', '-5.8%', '1.06x')
-        )
-        # other way around
-        rc = ResultComparison(self.r2, self.r1)
-        self.assertEquals(
-            rc.values(),
-            ('AngryPhonebook', '11616', '12325', '+6.1%', '0.94x')
-        )
-
     def test_values_is_dubious(self):
+        self.assertFalse(ResultComparison(self.r1, self.r2).is_dubious)
         self.r2.max = self.r1.min + 1
         # new.min < old.min < new.max
-        rc = ResultComparison(self.r1, self.r2)
-        self.assertEquals(rc.values()[4], '1.06x (?)')
+        self.assertTrue(ResultComparison(self.r1, self.r2).is_dubious)
         # other way around: old.min < new.min < old.max
-        rc = ResultComparison(self.r2, self.r1)
-        self.assertEquals(rc.values()[4], '0.94x (?)')
+        self.assertTrue(ResultComparison(self.r2, self.r1).is_dubious)
 
 
 class FileSystemIntegration(unittest.TestCase):
@@ -290,8 +254,8 @@ Totals,269,67351871,70727022,68220188,0,0,0"""
 
     def test_parse_results_formatted_text(self):
         """Parse format that Benchmark_Driver prints to console"""
-        log = (
-"""# TEST      SAMPLES MIN(μs) MAX(μs) MEAN(μs) SD(μs) MEDIAN(μs) MAX_RSS(B)
+        log = ("""
+# TEST      SAMPLES MIN(μs) MAX(μs) MEAN(μs) SD(μs) MEDIAN(μs) MAX_RSS(B)
 3 Array2D        20    2060    2188     2099      0       2099   20915200
   Totals        281 2693794 2882846  2748843      0          0          0""")
         parser = LogParser()
@@ -360,6 +324,37 @@ class TestReportFormatter(OldAndNewLog):
     def assert_html_contains(self, texts):
         self.assert_report_contains(texts, self.html)
 
+    def test_values(self):
+        self.assertEquals(
+            ReportFormatter.values(PerformanceTestResult(
+                '1,AngryPhonebook,20,10664,12933,11035,576,10884'.split(','))),
+            ('AngryPhonebook', '10664', '12933', '11035', '—')
+        )
+        self.assertEquals(
+            ReportFormatter.values(PerformanceTestResult(
+                '1,AngryPhonebook,1,12045,12045,12045,0,12045,10510336'
+                .split(','))),
+            ('AngryPhonebook', '12045', '12045', '12045', '10510336')
+        )
+
+        r1 = PerformanceTestResult(
+            '1,AngryPhonebook,1,12325,12325,12325,0,12325,10510336'.split(','))
+        r2 = PerformanceTestResult(
+            '1,AngryPhonebook,1,11616,11616,11616,0,11616,10502144'.split(','))
+        self.assertEquals(
+            ReportFormatter.values(ResultComparison(r1, r2)),
+            ('AngryPhonebook', '12325', '11616', '-5.8%', '1.06x')
+        )
+        self.assertEquals(
+            ReportFormatter.values(ResultComparison(r2, r1)),
+            ('AngryPhonebook', '11616', '12325', '+6.1%', '0.94x')
+        )
+        r2.max = r1.min + 1
+        self.assertEquals(
+            ReportFormatter.values(ResultComparison(r1, r2))[4],
+            '1.06x (?)'  # is_dubious
+        )
+
     def test_justified_columns(self):
         """Table columns are all formated with same width, defined by the
         longest value.
@@ -375,6 +370,16 @@ class TestReportFormatter(OldAndNewLog):
         """Report contains table headers for ResultComparisons and changed
         PerformanceTestResults.
         """
+        performance_test_result = self.tc.added[0]
+        self.assertEquals(
+            ReportFormatter.header_for(performance_test_result),
+            ('TEST', 'MIN', 'MAX', 'MEAN', 'MAX_RSS')
+        )
+        comparison_result = self.tc.increased[0]
+        self.assertEquals(
+            ReportFormatter.header_for(comparison_result),
+            ('TEST', 'OLD', 'NEW', 'DELTA', 'SPEEDUP')
+        )
         self.assert_markdown_contains([
             'TEST                  | OLD    | NEW    | DELTA   | SPEEDUP',
             '---                   | ---    | ---    | ---     | ---    ',

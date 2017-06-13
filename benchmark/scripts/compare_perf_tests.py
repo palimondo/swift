@@ -100,19 +100,6 @@ class PerformanceTestResult(object):
         values = [r.min, r.max, r.median][:min(r.samples, 3)]
         map(push, values)
 
-    # Column labels for header row in results table
-    header = ('TEST', 'MIN', 'MAX', 'MEAN', 'MAX_RSS')
-
-    def values(self):
-        """Values property for display in results table comparisons
-        in format: ('TEST', 'MIN', 'MAX', 'MEAN', 'MAX_RSS').
-        """
-        return (
-            self.name,
-            str(self.min), str(self.max), str(int(self.mean)),
-            str(self.max_rss) if self.max_rss else '—'
-        )
-
 
 class ResultComparison(object):
     """ResultComparison compares MINs from new and old PerformanceTestResult.
@@ -131,28 +118,18 @@ class ResultComparison(object):
         ratio = (new.min + 0.001) / (old.min + 0.001)
         self.delta = ((ratio - 1) * 100)
 
-        # Add ' (?)' to the speedup column as indication of dubious changes:
-        # result's MIN falls inside the (MIN, MAX) interval of result they are
-        # being compared with.
-        self.is_dubious = (
-            ' (?)' if ((old.min < new.min and new.min < old.max) or
-                       (new.min < old.min and old.min < new.max))
-            else '')
-
-    # Column labels for header row in results table
-    header = ('TEST', 'OLD', 'NEW', 'DELTA', 'SPEEDUP')
-
-    def values(self):
-        """Values property for display in results table comparisons
-        in format: ('TEST', 'OLD', 'NEW', 'DELTA', 'SPEEDUP').
-        """
-        return (self.name,
-                str(self.old.min), str(self.new.min),
-                '{0:+.1f}%'.format(self.delta),
-                '{0:.2f}x{1}'.format(self.ratio, self.is_dubious))
+        # Indication of dubious changes: when result's MIN falls inside the
+        # (MIN, MAX) interval of result they are being compared with.
+        self.is_dubious = ((old.min < new.min and new.min < old.max) or
+                           (new.min < old.min and old.min < new.max))
 
 
 class LogParser(object):
+    """LogParser converts variously formatted log outputs from
+    `Benchmark_Driver` and `Benchmark_O`('Onone', 'Ounchecked') into
+    `PerformanceTestResult`s. It can also merge together the results from
+    concatenated log files.
+    """
     def __init__(self):
         self.results, self.samples, self.num_iters = [], [], 1
 
@@ -181,23 +158,22 @@ class LogParser(object):
         (lambda self, num_iters: setattr(self, 'num_iters', num_iters)),
 
         re.compile(r'\s+Sample (\d+),(\d+)'):
-        (lambda self, ordinal, runtime:
-         self.samples.append((int(ordinal), int(self.num_iters), int(runtime)))
-        ),
+        (lambda self, i, runtime:
+         self.samples.append((int(i), int(self.num_iters), int(runtime)))),
 
         # FIXME remove pre-processed sample format
         # (I have manually reformatted logs for importing into Numbers:)
         re.compile(r'(\d+)\t(\d+)\t(\d+)'):
-        (lambda self, ordinal, num_iters, runtime:
-         self.samples.append((int(ordinal), int(num_iters), int(runtime))))
+        (lambda self, i, num_iters, runtime:
+         self.samples.append((int(i), int(num_iters), int(runtime))))
     }
 
     def parse_results(self, lines):
         for line in lines:
-            for regexp in LogParser.state_actions.keys():
+            for regexp, action in LogParser.state_actions.items():
                 match = regexp.match(line)
                 if match:
-                    LogParser.state_actions[regexp](self, *match.groups())
+                    action(self, *match.groups())
                     break  # stop after 1st match
             else:  # If none matches, skip the line.
                 # print('skipping: ' + line.rstrip('\n'))
@@ -219,11 +195,17 @@ class LogParser(object):
 
     @staticmethod
     def results_from_string(log_contents):
+        """Returns dictionary of test names and `PerformanceTestResult`s
+        parsed from the supplied string.
+        """
         return LogParser._results_from_lines(log_contents.splitlines())
 
     @staticmethod
-    def results_from_file(filename):
-        with open(filename) as f:
+    def results_from_file(log_file):
+        """Returns dictionary of test names and `PerformanceTestResult`s
+        parsed from the log file.
+        """
+        with open(log_file) as f:
             return LogParser._results_from_lines(f.readlines())
 
 
@@ -295,6 +277,33 @@ class ReportFormatter(object):
     GIT_DETAIL = """
 {0} ({1}): {2}"""
 
+    PERFORMANCE_TEST_RESULT_HEADER = ('TEST', 'MIN', 'MAX', 'MEAN', 'MAX_RSS')
+    RESULT_COMPARISON_HEADER = ('TEST', 'OLD', 'NEW', 'DELTA', 'SPEEDUP')
+
+    @staticmethod
+    def header_for(result):
+        """Column labels for header row in results table"""
+        return (ReportFormatter.PERFORMANCE_TEST_RESULT_HEADER
+                if isinstance(result, PerformanceTestResult) else
+                # isinstance(result, ResultComparison)
+                ReportFormatter.RESULT_COMPARISON_HEADER)
+
+    @staticmethod
+    def values(result):
+        """Values for display in results table comparisons."""
+        return (
+            (result.name,
+             str(result.min), str(result.max), str(int(result.mean)),
+             str(result.max_rss) if result.max_rss else '—')
+            if isinstance(result, PerformanceTestResult) else
+            # isinstance(result, ResultComparison)
+            (result.name,
+             str(result.old.min), str(result.new.min),
+             '{0:+.1f}%'.format(result.delta),
+             '{0:.2f}x{1}'.format(result.ratio,
+                                  ' (?)' if result.is_dubious else ''))
+        )
+
     def markdown(self):
         return self._formatted_text(
             ROW='{0} | {1} | {2} | {3} | {4} \n',
@@ -309,14 +318,15 @@ class ReportFormatter(object):
 
     def _column_widths(self):
         changed = self.comparator.decreased + self.comparator.increased
-        comparisons = (changed if self.changes_only else
-                       changed + self.comparator.unchanged)
-        comparisons += self.comparator.added + self.comparator.removed
+        results = (changed if self.changes_only else
+                   changed + self.comparator.unchanged)
+        results += self.comparator.added + self.comparator.removed
 
         widths = [
             map(len, columns) for columns in
-            [PerformanceTestResult.header, ResultComparison.header] +
-            [c.values() for c in comparisons]
+            [ReportFormatter.PERFORMANCE_TEST_RESULT_HEADER,
+             ReportFormatter.RESULT_COMPARISON_HEADER] +
+            [ReportFormatter.values(r) for r in results]
         ]
 
         def max_widths(maximum, widths):
@@ -342,13 +352,14 @@ class ReportFormatter(object):
 
         def table(title, results, is_strong=False, is_open=False):
             rows = [
-                row(format_columns(result_comparison.values(), is_strong))
-                for result_comparison in results
+                row(format_columns(ReportFormatter.values(r), is_strong))
+                for r in results
             ]
             return ('' if not rows else
                     DETAIL.format(*[
                         title, len(results),
-                        (header(results[0].header) + ''.join(rows)),
+                        (header(ReportFormatter.header_for(results[0])) +
+                         ''.join(rows)),
                         ('open' if is_open else '')
                     ]))
 
@@ -418,11 +429,12 @@ class ReportFormatter(object):
 
         def table(title, results, speedup_color):
             rows = [
-                row(*(result_comparison.values() + (speedup_color,)))
-                for result_comparison in results
+                row(*(ReportFormatter.values(r) + (speedup_color,)))
+                for r in results
             ]
             return ('' if not rows else
-                    header((title, len(results)) + results[0].header[1:]) +
+                    header((title, len(results)) +
+                           ReportFormatter.header_for(results[0])[1:]) +
                     ''.join(rows))
 
         return self.HTML.format(
