@@ -227,7 +227,7 @@ class OldAndNewLog(unittest.TestCase):
 
 
 class TestLogParser(unittest.TestCase):
-    def test_parse_verbose_log(self):
+    def test_parse_results_verbose(self):
         """Parse multiple performance test results with 2 sample formats:
         single line for N = 1; two lines for N > 1.
         """
@@ -249,46 +249,42 @@ Running Array2D for 3 samples.
 
 Totals,2,381367,394937,386386,0,0"""
         parser = LogParser()
-        benchmarks = parser.parse_results(verbose_log.split('\n'))
+        results = parser.parse_results(verbose_log.split('\n'))
 
-        b = benchmarks[0]
+        r = results[0]
         self.assertEquals(
-            (b.name, b.min, b.max, int(b.mean), int(b.sd), b.median),
+            (r.name, r.min, r.max, int(r.mean), int(r.sd), r.median),
             ('AngryPhonebook', 11467, 13898, 12392, 1315, 11812)
         )
-        self.assertEquals(b.samples, len(b.all_samples))
-        self.assertEquals(benchmarks[0].all_samples,
+        self.assertEquals(r.samples, len(r.all_samples))
+        self.assertEquals(results[0].all_samples,
                           [(0, 78, 11812), (1, 90, 13898), (2, 91, 11467)])
 
-        b = benchmarks[1]
+        r = results[1]
         self.assertEquals(
-            (b.name, b.min, b.max, int(b.mean), int(b.sd), b.median),
+            (r.name, r.min, r.max, int(r.mean), int(r.sd), r.median),
             ('Array2D', 369900, 381039, 373994, 6127, 371043)
         )
-        self.assertEquals(b.samples, len(b.all_samples))
-        self.assertEquals(benchmarks[1].all_samples,
+        self.assertEquals(r.samples, len(r.all_samples))
+        self.assertEquals(results[1].all_samples,
                           [(0, 1, 369900), (1, 1, 381039), (2, 1, 371043)])
 
-
-class TestLogParserIntegration(FileSystemIntegration):
-    def test_load_from_csv(self):
+    def test_parse_results(self):
         """Ignores header row, empty lines and Totals row"""
-        log_file = self.write_temp_file('log.log', """
-#,TEST,SAMPLES,MIN(us),MAX(us),MEAN(us),SD(us),MEDIAN(us)
+        log = """#,TEST,SAMPLES,MIN(us),MAX(us),MEAN(us),SD(us),MEDIAN(us)
 34,BitCount,20,3,4,4,0,4,10192896
 
-Totals,269,67351871,70727022,68220188,0,0,0
-""")
-        results = LogParser.load_from_csv(log_file)
-        self.assertEquals(results.keys(), ['BitCount'])
-        self.assertTrue(isinstance(results['BitCount'], PerformanceTestResult))
+Totals,269,67351871,70727022,68220188,0,0,0"""
+        parser = LogParser()
+        results = parser.parse_results(log.splitlines())
+        self.assertTrue(isinstance(results[0], PerformanceTestResult))
+        self.assertEquals(results[0].name, 'BitCount')
 
-    def test_merge(self):
-        concatenated_logs = self.write_temp_file('concat.log', """
-4,ArrayAppend,20,23641,29000,24990,0,24990
-4,ArrayAppend,1,20000,20000,20000,0,20000
-""")
-        results = LogParser.load_from_csv(concatenated_logs)
+    def test_results_from_merge(self):
+        """Parsing concatenated log merges same PerformanceTestResults"""
+        concatenated_logs = """4,ArrayAppend,20,23641,29000,24990,0,24990
+4,ArrayAppend,1,20000,20000,20000,0,20000"""
+        results = LogParser.results_from_string(concatenated_logs)
         self.assertEquals(results.keys(), ['ArrayAppend'])
         result = results['ArrayAppend']
         self.assertTrue(isinstance(result, PerformanceTestResult))

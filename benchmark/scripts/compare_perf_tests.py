@@ -16,7 +16,6 @@
 from __future__ import print_function
 
 import argparse
-import csv
 import re
 import sys
 from math import sqrt
@@ -51,6 +50,8 @@ class PerformanceTestResult(object):
         self.median = int(csv_row[7])   # Median runtime (ms)
         self.max_rss = (                # Maximum Resident Set Size (B)
             int(csv_row[8]) if len(csv_row) > 8 else None)
+        # Sample lists for statistical analysis of measured results
+        self.all_samples = None
 
     def __repr__(self):
         return (
@@ -152,92 +153,47 @@ class ResultComparison(object):
 
 
 class LogParser(object):
+    def __init__(self):
+        self.results, self.samples, self.num_iters = [], [], 1
+
     # Parse lines like this
     # #,TEST,SAMPLES,MIN(μs),MAX(μs),MEAN(μs),SD(μs),MEDIAN(μs)
     results_re = re.compile(r'(\d+,[ \t]*\w+,' +
                             ','.join([r'[ \t]*[\d.]+'] * 6) + ')')
-    # The Totals line would be parsed like this.
-    totals_re = re.compile(r'Totals,' + ','.join([r'[ \t]*[\d.]+'] * 6))
-    # Preamble for test run in --verbose mode
-    test_num_samples_re = re.compile(r'Running (\w+) for (\d+) samples\.')
-    # Adaptively determined N - test loop multiple adjusting runtime to ~1s
-    num_iters_re = re.compile(r'\s+Measuring with scale (\d+).')
-    # Sample number and runtime in ms
-    sample_num_time_re = re.compile(r'\s+Sample (\d+),(\d+)')
-    # FIXME remove pre-processed sample format
-    # (I have manually reformatted logs for importing into Numbers like this:)
-    sample_preprocessed_re = re.compile(r'(\d+)\t(\d+)\t(\d+)')
-    # Parsing state machine
-    RunningTest, Iterations, Sample, Results, Totals, SamplePrep = range(6)
-
-    def __init__(self):
-        self.results = []
-        self.samples = []
-        self.num_iters = 1
-        self.state = LogParser.Results
-
-    def _reset_samples(self, test_name, num_samples):
-        del test_name, num_samples  # unused
-        self.num_iters = 1
-        self.samples = []
-
-    def _set_num_iters(self, num_iters):
-        self.num_iters = num_iters
-
-    def _append_sample(self, ordinal, runtime):
-        self.samples.append((int(ordinal), int(self.num_iters), int(runtime)))
-        self.num_iters = 1
-
-    def _append_sample_prep(self, ordinal, num_iters, runtime):
-        self.samples.append((int(ordinal), int(num_iters), int(runtime)))
-        self.num_iters = 1
 
     def _append_result(self, result):
-        test_result = PerformanceTestResult(result.split(','))
-        test_result.all_samples = self.samples
-        self.results.append(test_result)
+        r = PerformanceTestResult(result.split(','))
+        if self.samples:
+            r.all_samples = self.samples
+        self.results.append(r)
+        self.num_iters, self.samples = 1, []
 
-    # Transitions pairs: (RegEx, next_state)
-    transitions = {
-        RunningTest: [
-            (num_iters_re, Iterations),
-            (sample_num_time_re, Sample),
-            (sample_preprocessed_re, SamplePrep)
-        ],
-        Iterations: [
-            (sample_num_time_re, Sample)
-        ],
-        Sample: [
-            (num_iters_re, Iterations),
-            (sample_num_time_re, Sample),
-            (results_re, Results)
-        ],
-        Results: [
-            (test_num_samples_re, RunningTest),
-            (totals_re, Totals),
-        ],
-        SamplePrep: [  # FIXME
-            (sample_preprocessed_re, SamplePrep),
-            (results_re, Results)
-        ],
-    }
+    # Regular expression and action to take when it matches the parsed line
+    state_actions = {
+        results_re: _append_result,
 
-    actions = {
-        RunningTest: _reset_samples,
-        Iterations: _set_num_iters,
-        Sample: _append_sample,
-        Results: _append_result,
-        Totals: lambda _: None,
-        SamplePrep: _append_sample_prep  # FIXME
+        # Adaptively determined N; test loop multiple adjusting runtime to ~1s
+        re.compile(r'\s+Measuring with scale (\d+).'):
+        (lambda self, num_iters: setattr(self, 'num_iters', num_iters)),
+
+        re.compile(r'\s+Sample (\d+),(\d+)'):
+        (lambda self, ordinal, runtime:
+         self.samples.append((int(ordinal), int(self.num_iters), int(runtime)))
+        ),
+
+        # FIXME remove pre-processed sample format
+        # (I have manually reformatted logs for importing into Numbers:)
+        re.compile(r'(\d+)\t(\d+)\t(\d+)'):
+        (lambda self, ordinal, num_iters, runtime:
+         self.samples.append((int(ordinal), int(num_iters), int(runtime))))
     }
 
     def parse_results(self, lines):
         for line in lines:
-            for regexp, next_state in self.transitions[self.state]:
+            for regexp in LogParser.state_actions.keys():
                 match = regexp.match(line)
                 if match:
-                    self.actions[next_state](self, *match.groups())
-                    self.state = next_state
+                    LogParser.state_actions[regexp](self, *match.groups())
                     break  # stop after 1st match
             else:  # If none matches, skip the line.
                 # print('skipping: ' + line.rstrip('\n'))
@@ -245,11 +201,8 @@ class LogParser(object):
         return self.results
 
     @staticmethod
-    def load_from_csv(filename):  # handles output from Benchmark_O and
-        def skip_totals(row):     # Benchmark_Driver (added MAX_RSS column)
-            return len(row) > 7 and row[0].isdigit()
-        tests = map(PerformanceTestResult,
-                    filter(skip_totals, csv.reader(open(filename))))
+    def _results_from_lines(lines):
+        tests = LogParser().parse_results(lines)
 
         def add_or_merge(names, r):
             if r.name not in names:
@@ -257,7 +210,17 @@ class LogParser(object):
             else:
                 names[r.name].merge(r)
             return names
+
         return reduce(add_or_merge, tests, dict())
+
+    @staticmethod
+    def results_from_string(log_contents):
+        return LogParser._results_from_lines(log_contents.splitlines())
+
+    @staticmethod
+    def results_from_file(filename):
+        with open(filename) as f:
+            return LogParser._results_from_lines(f.readlines())
 
 
 class TestComparator(object):
@@ -498,8 +461,8 @@ def parse_args(args):
 
 def main():
     args = parse_args(sys.argv[1:])
-    comparator = TestComparator(LogParser.load_from_csv(args.old_file),
-                                LogParser.load_from_csv(args.new_file),
+    comparator = TestComparator(LogParser.results_from_file(args.old_file),
+                                LogParser.results_from_file(args.new_file),
                                 args.delta_threshold)
     formatter = ReportFormatter(comparator, args.old_branch, args.new_branch,
                                 args.changes_only)
