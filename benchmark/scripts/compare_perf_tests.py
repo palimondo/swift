@@ -19,6 +19,74 @@ import argparse
 import re
 import sys
 from math import sqrt
+from collections import namedtuple
+
+
+# Sample = namedtuple('Sample', 'i num_iters runtime')
+class Sample(namedtuple('Sample', 'i num_iters runtime')):
+    def __repr__(self):
+        return 's({0.i!r}, {0.num_iters!r}, {0.runtime!r})'.format(self)
+
+class PerformanceTestSamples(object):
+    """PerformanceTestSamples is a collection of runtime samples from benchmark
+    executions performed by the driver that computes the sample population
+    statistics.
+    """
+    def __init__(self, name, samples=None):
+        self.name = name  # Name of the performance test
+        self.samples = []
+        self.mean = 0
+        self.S_runtime = 0  # For computing running variance
+        for sample in samples or []:
+            self.add(sample)
+
+    def add(self, sample):
+        assert isinstance(sample, Sample)
+        state = (self.count, self.mean, self.S_runtime)
+        state = self.running_mean_variance(state, sample.runtime)
+        _, self.mean, self.S_runtime = state
+        self.samples.append(sample)
+        self.samples.sort(key=lambda s: s.runtime)
+
+    @property
+    def count(self):
+        return len(self.samples)
+
+    @property
+    def min(self):
+        return self.samples[0].runtime
+
+    @property
+    def max(self):
+        return self.samples[-1].runtime
+
+    @property
+    def median(self):
+        return self.samples[self.count/2].runtime
+
+    @property
+    def sd(self):
+        """Standard Deviation (ms)"""
+        return (0 if self.count < 2 else
+                sqrt(self.S_runtime / (self.count - 1)))
+
+    @staticmethod
+    def running_mean_variance((k, M_, S_), x):
+        """
+        Compute running variance, B. P. Welford's method
+        See Knuth TAOCP vol 2, 3rd edition, page 232, or
+        https://www.johndcook.com/blog/standard_deviation/
+        M is mean, Standard Deviation is defined as sqrt(S/k-1)
+        """
+        k = float(k + 1)
+        M = M_ + (x - M_) / k
+        S = S_ + (x - M_) * (x - M)
+        return (k, M, S)
+
+    @property
+    def cv(self):
+        """Coeficient of Variation (%)"""
+        return (self.sd / self.mean) * 100
 
 
 class PerformanceTestResult(object):
@@ -39,66 +107,30 @@ class PerformanceTestResult(object):
         """
         # csv_row[0] is just an ordinal number of the test - skip that
         self.name = csv_row[1]          # Name of the performance test
-        self.samples = int(csv_row[2])  # Number of measurement samples taken
+        self.num_samples = (            # Number of measurement samples taken
+            int(csv_row[2]))
         self.min = int(csv_row[3])      # Minimum runtime (ms)
         self.max = int(csv_row[4])      # Maximum runtime (ms)
         self.mean = int(csv_row[5])     # Mean (average) runtime (ms)
-        sd = int(csv_row[6])            # Standard Deviation (ms)
-        # For computing running variance
-        self.S_runtime = (0 if self.samples < 2 else
-                          (sd * sd) * (self.samples - 1))
+        self.sd = float(csv_row[6])     # Standard Deviation (ms)
         self.median = int(csv_row[7])   # Median runtime (ms)
         self.max_rss = (                # Maximum Resident Set Size (B)
             int(csv_row[8]) if len(csv_row) > 8 else None)
-        # Sample lists for statistical analysis of measured results
-        self.all_samples = None
 
     def __repr__(self):
         return (
             '<PerformanceTestResult name:{0.name!r} '
-            'samples:{0.samples!r} min:{0.min!r} max:{0.max!r} '
+            'samples:{0.num_samples!r} min:{0.min!r} max:{0.max!r} '
             'mean:{0.mean!r} sd:{0.sd!r} median:{0.median!r}>'.format(self))
-
-    @property
-    def sd(self):
-        """Standard Deviation (ms)"""
-        return (0 if self.samples < 2 else
-                sqrt(self.S_runtime / (self.samples - 1)))
-
-    @staticmethod
-    def running_mean_variance((k, M_, S_), x):
-        """
-        Compute running variance, B. P. Welford's method
-        See Knuth TAOCP vol 2, 3rd edition, page 232, or
-        https://www.johndcook.com/blog/standard_deviation/
-        M is mean, Standard Deviation is defined as sqrt(S/k-1)
-        """
-        k = float(k + 1)
-        M = M_ + (x - M_) / k
-        S = S_ + (x - M_) * (x - M)
-        return (k, M, S)
 
     def merge(self, r):
         """Merging test results recomputes min and max.
-        It attempts to recompute mean and standard deviation when all_samples
-        are available. There is no correct way to compute these values from
-        test results that are summaries from more than 3 samples.
-
         The use case here is comparing tests results parsed from concatenated
         log files from multiple runs of benchmark driver.
         """
         self.min = min(self.min, r.min)
         self.max = max(self.max, r.max)
-        # self.median = None # unclear what to do here
-
-        def push(x):
-            state = (self.samples, self.mean, self.S_runtime)
-            state = self.running_mean_variance(state, x)
-            (self.samples, self.mean, self.S_runtime) = state
-
-        # Merging test results with up to 3 samples is exact
-        values = [r.min, r.max, r.median][:min(r.samples, 3)]
-        map(push, values)
+        self.median, self.mean, self.sd = None, None, None
 
 
 class ResultComparison(object):
@@ -108,7 +140,7 @@ class ResultComparison(object):
     def __init__(self, old, new):
         self.old = old
         self.new = new
-        assert(old.name == new.name)
+        assert old.name == new.name
         self.name = old.name  # Test name, convenience accessor
 
         # Speedup ratio
@@ -145,7 +177,7 @@ class LogParser(object):
             columns = result.split()
         r = PerformanceTestResult(columns)
         if self.samples:
-            r.all_samples = self.samples
+            r.all_samples = PerformanceTestSamples(r.name, self.samples)
         self.results.append(r)
         self.num_iters, self.samples = 1, []
 
@@ -159,7 +191,8 @@ class LogParser(object):
 
         re.compile(r'\s+Sample (\d+),(\d+)'):
         (lambda self, i, runtime:
-         self.samples.append((int(i), int(self.num_iters), int(runtime)))),
+         self.samples.append(
+             Sample(int(i), int(self.num_iters), int(runtime)))),
 
         # FIXME remove pre-processed sample format
         # (I have manually reformatted logs for importing into Numbers:)
