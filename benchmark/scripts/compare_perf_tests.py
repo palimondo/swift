@@ -20,6 +20,7 @@ import re
 import sys
 from math import sqrt
 from collections import namedtuple
+from bisect import bisect, insort
 
 
 # Sample = namedtuple('Sample', 'i num_iters runtime')
@@ -35,22 +36,82 @@ class PerformanceTestSamples(object):
     def __init__(self, name, samples=None):
         self.name = name  # Name of the performance test
         self.samples = []
+        self.anomalies = []
+        self._runtimes = []
         self.mean = 0
         self.S_runtime = 0  # For computing running variance
         for sample in samples or []:
             self.add(sample)
 
+    def __str__(self):
+        return (
+            '🏋⏱ {0.name!s} {0.count!r}📏  '
+            '∧={0.min!r} ∨={0.max!r} ⩥={0.range!r} '
+            'σ={0.sd:.0f} ¯={0.mean:.0f} '
+            # '~={0.median!r} '
+            'CV={0.cv:.2%}'
+            .format(self) if self.samples else
+            '🏋⏱ {0.name!s} {0.samples!r}📏 '.format(self))
+
     def add(self, sample):
         assert isinstance(sample, Sample)
-        state = (self.count, self.mean, self.S_runtime)
-        state = self.running_mean_variance(state, sample.runtime)
-        _, self.mean, self.S_runtime = state
-        self.samples.append(sample)
-        self.samples.sort(key=lambda s: s.runtime)
+        old_stats = self._add(sample)
+        # print(self, ' Added: ', sample)
+        if self.cv > 0.05:  # Coeficient of variation crossed 5% threshold
+            if sample.runtime > self.mean:
+                self._undo_add(sample, old_stats)
+            else:
+                self._purge_anomalies()
+
+    def _add(self, sample):
+        old_stats = self._update_stats(sample)
+        i = bisect(self._runtimes, sample.runtime)
+        self._runtimes.insert(i, sample.runtime)
+        self.samples.insert(i, sample)
+        return old_stats
+
+    def _update_stats(self, sample):
+        old_stats = (self.count, self.mean, self.S_runtime)
+        _, self.mean, self.S_runtime = (
+            self.running_mean_variance(old_stats, sample.runtime))
+        return old_stats
+
+    def _undo_add(self, sample, old_state):
+        # print('Rejected:', sample, self.cv)
+        self.samples.remove(sample)
+        self._runtimes.remove(sample.runtime)
+        self.anomalies.append(sample)
+        _, self.mean, self.S_runtime = old_state
+
+    def _purge_anomalies(self, ceiling=None):
+        assert hasattr(self, 'purge_in_progress') == False
+        self.purge_in_progress = True
+
+        ceiling = ceiling or self._ceiling()
+        i = bisect(self._runtimes, ceiling)
+        # print('Purged:', self.samples[i:])
+        anomalies = self.anomalies + self.samples[i:]
+        self.__init__(self.name, self.samples[:i])
+        assert len(self.samples) == i
+        assert self.anomalies == []
+        self.anomalies = anomalies
+        
+        del self.purge_in_progress
+
+    def _ceiling(self):
+        return self.max - self.sd
 
     @property
     def count(self):
         return len(self.samples)
+
+    @property
+    def num_samples(self):
+        return len(self.samples) + len(self.anomalies)
+
+    @property
+    def all_samples(self):
+        return sorted(self.samples + self.anomalies, key=lambda s: s.i)
 
     @property
     def min(self):
@@ -72,8 +133,7 @@ class PerformanceTestSamples(object):
 
     @staticmethod
     def running_mean_variance((k, M_, S_), x):
-        """
-        Compute running variance, B. P. Welford's method
+        """Compute running variance, B. P. Welford's method
         See Knuth TAOCP vol 2, 3rd edition, page 232, or
         https://www.johndcook.com/blog/standard_deviation/
         M is mean, Standard Deviation is defined as sqrt(S/k-1)
@@ -86,7 +146,16 @@ class PerformanceTestSamples(object):
     @property
     def cv(self):
         """Coeficient of Variation (%)"""
-        return (self.sd / self.mean) * 100
+        return self.sd / self.mean
+
+    @property
+    def range(self):
+        return self.max - self.min
+
+    @property
+    def spread(self):
+        """Sample Spread - range as (%) of mean value"""
+        return self.range / self.mean
 
 
 class PerformanceTestResult(object):
@@ -177,7 +246,7 @@ class LogParser(object):
             columns = result.split()
         r = PerformanceTestResult(columns)
         if self.samples:
-            r.all_samples = PerformanceTestSamples(r.name, self.samples)
+            r.samples = PerformanceTestSamples(r.name, self.samples)
         self.results.append(r)
         self.num_iters, self.samples = 1, []
 

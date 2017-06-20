@@ -105,19 +105,39 @@ class TestPerformanceTestSamples(unittest.TestCase):
     def test_computes_mean_sd_cv(self):
         self.assertEqualStats((208.0, 0.0, 0.0))
         self.samples.add(self.rs[2])
-        self.assertEqualStats((212.0, 5.66, 2.67))
+        self.assertEqualStats((212.0, 5.66, 2.67 / 100))
         self.samples.add(self.rs[3])
-        self.assertEqualStats((210.67, 4.62, 2.19))
+        self.assertEqualStats((210.67, 4.62, 2.19 / 100))
 
     def test_init_with_samples(self):
         ss = PerformanceTestSamples('Lots', self.rs[1:])
         self.assertEquals(ss.count, 10)
         self.samples = ss
-        self.assertEqualStats((207.10, 7.26, 3.51))
+        self.assertEqualStats((207.10, 7.26, 3.51 / 100))
+
+    def test_computes_range_spread(self):
+        self.assertAlmostEquals(self.samples.range, 0)
+        self.assertAlmostEquals(self.samples.spread, 0.0)
+        self.samples.add(self.rs[2])
+        self.assertAlmostEquals(self.samples.range, 8)
+        self.assertAlmostEquals(self.samples.spread, 3.77 / 100, places=2)
+        self.samples.add(self.rs[3])
+        self.samples.add(self.rs[4])
+        self.assertAlmostEquals(self.samples.range, 19)
+        self.assertAlmostEquals(self.samples.spread, 9.17 / 100, places=2)
+
+    def test_rejects_anomalous_samples(self):
+        self.assertEquals(self.samples.count, 1)
+        self.samples.add(self.rs[0])
+        self.assertEquals(self.samples.count, 1)
+        self.assertEquals(self.samples.anomalies[0], self.rs[0])
 
     def test_purges_anomalies(self):
-        # TODO
-        pass
+        self.samples = PerformanceTestSamples('Anomaly', self.rs[:1])
+        self.assertEquals(self.samples.count, 1)
+        self.samples.add(self.rs[1])
+        self.assertEquals(self.samples.count, 1)
+        self.assertEquals(self.samples.anomalies[0], self.rs[0])
 
 
 class TestPerformanceTestResult(unittest.TestCase):
@@ -284,9 +304,8 @@ Totals,2,381367,394937,386386,0,0"""
             (r.name, r.min, r.max, int(r.mean), int(r.sd), r.median),
             ('AngryPhonebook', 11467, 13898, 12392, 1315, 11812)
         )
-        self.assertEquals(r.num_samples, r.all_samples.count)
-        self.assertEquals(sorted(results[0].all_samples.samples,
-                                 key=lambda s: s.i),
+        self.assertEquals(r.num_samples, r.samples.num_samples)
+        self.assertEquals(results[0].samples.all_samples,
                           [(0, 78, 11812), (1, 90, 13898), (2, 91, 11467)])
 
         r = results[1]
@@ -294,9 +313,8 @@ Totals,2,381367,394937,386386,0,0"""
             (r.name, r.min, r.max, int(r.mean), int(r.sd), r.median),
             ('Array2D', 369900, 381039, 373994, 6127, 371043)
         )
-        self.assertEquals(r.num_samples, r.all_samples.count)
-        self.assertEquals(sorted(results[1].all_samples.samples,
-                                 key=lambda s: s.i),
+        self.assertEquals(r.num_samples, r.samples.num_samples)
+        self.assertEquals(results[1].samples.all_samples,
                           [(0, 1, 369900), (1, 1, 381039), (2, 1, 371043)])
 
     def test_parse_results_csv(self):
