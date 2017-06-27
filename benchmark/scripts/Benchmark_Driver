@@ -28,6 +28,46 @@ import urllib2
 DRIVER_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
+class BenchmarkDriver(object):
+    def __init__(self, args, tests=None, _subprocess=None):
+        self.args = args
+        self._subprocess = _subprocess or subprocess
+        self.tests = tests or self._get_tests()
+
+    def _invoke(self, cmd):
+        return self._subprocess.check_output(
+            cmd, stderr=self._subprocess.STDOUT)
+
+    @property
+    def test_harness(self):
+        return os.path.join(self.args.tests,
+                            "Benchmark_" + self.args.optimization)
+
+    @property
+    def _list_benchmarks_command(self):
+        return [self.test_harness, '--list'] + (
+            ['--run-all'] if (self.args.benchmarks or self.args.filters) else
+            [])
+
+    def _get_tests(self):
+        """Return a list of performance tests to run"""
+        tests = self._invoke(self._list_benchmarks_command).split()[2:]
+        if self.args.filters:
+            return self._tests_matching_patterns(tests)
+        if self.args.benchmarks:
+            return self._tests_by_name_or_ordinal(tests)
+        return tests
+
+    def _tests_matching_patterns(self, tests):
+        regexes = [re.compile(pattern) for pattern in self.args.filters]
+        return sorted(list(set([name for pattern in regexes
+                                for name in tests if pattern.match(name)])))
+
+    def _tests_by_name_or_ordinal(self, tests):
+        tests.extend(map(str, range(1, len(tests) + 1)))  # ordinal numbers
+        return sorted(list(set(tests).intersection(set(self.args.benchmarks))))
+
+
 def parse_results(res, optset):
     # Parse lines like this
     # #,TEST,SAMPLES,MIN(μs),MAX(μs),MEAN(μs),SD(μs),MEDIAN(μs),PEAK_MEMORY(B)
@@ -116,22 +156,6 @@ def instrument_test(driver_path, test, num_samples):
     avg_test_output = map(str, avg_test_output)
 
     return avg_test_output
-
-
-def get_tests(driver_path, args):
-    """Return a list of available performance tests"""
-    driver = ([driver_path, '--list'])
-    if args.benchmarks or args.filters:
-        driver.append('--run-all')
-    tests = subprocess.check_output(driver).split()[2:]
-    if args.filters:
-        regexes = [re.compile(pattern) for pattern in args.filters]
-        return sorted(list(set([name for pattern in regexes
-                                for name in tests if pattern.match(name)])))
-    if not args.benchmarks:
-        return tests
-    tests.extend(map(str, range(1, len(tests) + 1)))  # ordinal numbers
-    return sorted(list(set(tests).intersection(set(args.benchmarks))))
 
 
 def get_current_git_branch(git_repo_path):
@@ -235,12 +259,14 @@ def submit(args):
     data['Tests'] = []
     data['Machine'] = {'Info': {'name': args.machine}, 'Name': args.machine}
     print("\nRunning benchmarks...")
-    for optset in args.optimization:
+    optimizations = args.optimization
+    for optset in optimizations:
         print("Opt level:\t", optset)
-        file = os.path.join(args.tests, "Benchmark_" + optset)
+        args.optimization = optset
+        driver = BenchmarkDriver(args)
         try:
             res = run_benchmarks(
-                file, benchmarks=get_tests(file, args),
+                driver.test_harness, benchmarks=driver.tests,
                 num_samples=args.iterations)
             data['Tests'].extend(parse_results(res, optset))
         except subprocess.CalledProcessError as e:
@@ -261,10 +287,9 @@ def submit(args):
 
 
 def run(args):
-    optset = args.optimization
-    file = os.path.join(args.tests, "Benchmark_" + optset)
+    driver = BenchmarkDriver(args)
     run_benchmarks(
-        file, benchmarks=get_tests(file, args),
+        driver.test_harness, benchmarks=driver.tests,
         num_samples=args.iterations, verbose=True,
         log_directory=args.output_dir,
         swift_repo=args.swift_repo)
@@ -373,16 +398,17 @@ def positive_int(value):
     return ivalue
 
 
-def main():
+def parse_args(args):
+    """Parse command line arguments and set default values."""
     parser = argparse.ArgumentParser(
         epilog='Example: ./Benchmark_Driver run -i 5 -f Prefix -f .*Suffix.*'
     )
     subparsers = parser.add_subparsers(
         title='Swift benchmark driver commands',
-        help='See COMMAND -h for additional arguments', metavar='<command>')
+        help='See COMMAND -h for additional arguments', metavar='COMMAND')
 
-    parent_parser = argparse.ArgumentParser(add_help=False)
-    benchmarks_group = parent_parser.add_mutually_exclusive_group()
+    shared_benchmarks_parser = argparse.ArgumentParser(add_help=False)
+    benchmarks_group = shared_benchmarks_parser.add_mutually_exclusive_group()
     benchmarks_group.add_argument(
         'benchmarks',
         default=[],
@@ -391,7 +417,7 @@ def main():
         '-f', '--filter', dest='filters', action='append',
         help='run all tests whose name match regular expression PATTERN, ' +
         'multiple filters are supported', metavar="PATTERN")
-    parent_parser.add_argument(
+    shared_benchmarks_parser.add_argument(
         '-t', '--tests',
         help='directory containing Benchmark_O{,none,unchecked} ' +
         '(default: DRIVER_DIR)',
@@ -400,7 +426,7 @@ def main():
     submit_parser = subparsers.add_parser(
         'submit',
         help='Run benchmarks and submit results to LNT',
-        parents=[parent_parser])
+        parents=[shared_benchmarks_parser])
     submit_parser.add_argument(
         '-o', '--optimization', nargs='+',
         help='optimization levels to use (default: O Onone Ounchecked)',
@@ -423,7 +449,7 @@ def main():
     run_parser = subparsers.add_parser(
         'run',
         help='Run benchmarks and output results to stdout',
-        parents=[parent_parser])
+        parents=[shared_benchmarks_parser])
     run_parser.add_argument(
         '-o', '--optimization',
         metavar='OPT',
@@ -460,7 +486,12 @@ def main():
              'branch (default: master)')
     compare_parser.set_defaults(func=compare)
 
-    args = parser.parse_args()
+    return parser.parse_args(args)
+
+
+def main():
+    args = parse_args(sys.argv[1:])
+
     if args.func != compare and isinstance(args.optimization, list):
         args.optimization = sorted(list(set(args.optimization)))
     return args.func(args)
