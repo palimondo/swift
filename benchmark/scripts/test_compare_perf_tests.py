@@ -19,9 +19,6 @@ import sys
 import tempfile
 import unittest
 
-from StringIO import StringIO
-from contextlib import contextmanager
-
 from compare_perf_tests import LogParser
 from compare_perf_tests import PerformanceTestResult
 from compare_perf_tests import PerformanceTestSamples
@@ -32,32 +29,23 @@ from compare_perf_tests import TestComparator
 from compare_perf_tests import main
 from compare_perf_tests import parse_args
 
+from test_utils import captured_output
+
 # Multiple tests here would benefit from mocking, but as we need to run on
 # Python 2.7, and the unittest.mock was added in Python 3.3. We're content with
 # just observing side effects of propper interaction between our classes here.
 # It is more pragmatic then hand-rolling all the mocks... Sorry!
 
 
-@contextmanager
-def captured_output():
-    new_out, new_err = StringIO(), StringIO()
-    old_out, old_err = sys.stdout, sys.stderr
-    try:
-        sys.stdout, sys.stderr = new_out, new_err
-        yield sys.stdout, sys.stderr
-    finally:
-        sys.stdout, sys.stderr = old_out, old_err
-
-
 class TestSample(unittest.TestCase):
     def test_has_named_fields(self):
-        s = Sample(1,2,3)
+        s = Sample(1, 2, 3)
         self.assertEquals(s.i, 1)
         self.assertEquals(s.num_iters, 2)
         self.assertEquals(s.runtime, 3)
 
     def test_is_iterable(self):
-        s = Sample(1,2,3)
+        s = Sample(1, 2, 3)
         self.assertEquals(s[0], 1)
         self.assertEquals(s[1], 2)
         self.assertEquals(s[2], 3)
@@ -138,6 +126,13 @@ class TestPerformanceTestSamples(unittest.TestCase):
         self.samples.add(self.rs[1])
         self.assertEquals(self.samples.count, 1)
         self.assertEquals(self.samples.anomalies[0], self.rs[0])
+
+    def test_purges_anomalies_extreme(self):
+        self.samples = PerformanceTestSamples('ExtremeAnomaly', self.rs)
+        self.assertEquals(self.samples.count, 10)
+        self.samples.add(Sample(42, 42, 176))
+        self.assertEquals(self.samples.count, 1)
+        self.assertEquals(len(self.samples.anomalies), 11)
 
 
 class TestPerformanceTestResult(unittest.TestCase):

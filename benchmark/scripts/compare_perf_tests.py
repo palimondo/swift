@@ -18,15 +18,16 @@ from __future__ import print_function
 import argparse
 import re
 import sys
-from math import sqrt
+from bisect import bisect
 from collections import namedtuple
-from bisect import bisect, insort
+from math import sqrt
 
 
 # Sample = namedtuple('Sample', 'i num_iters runtime')
 class Sample(namedtuple('Sample', 'i num_iters runtime')):
     def __repr__(self):
         return 's({0.i!r}, {0.num_iters!r}, {0.runtime!r})'.format(self)
+
 
 class PerformanceTestSamples(object):
     """PerformanceTestSamples is a collection of runtime samples from benchmark
@@ -48,8 +49,8 @@ class PerformanceTestSamples(object):
             '🏋⏱ {0.name!s} {0.count!r}📏  '
             '∧={0.min!r} ∨={0.max!r} ⩥={0.range!r} '
             'σ={0.sd:.0f} ¯={0.mean:.0f} '
-            # '~={0.median!r} '
-            'CV={0.cv:.2%}'
+            '~={0.median!r} '
+            '⧮={0.cv:.2%} ⧱={0.spread:.2%}'
             .format(self) if self.samples else
             '🏋⏱ {0.name!s} {0.samples!r}📏 '.format(self))
 
@@ -84,19 +85,21 @@ class PerformanceTestSamples(object):
         _, self.mean, self.S_runtime = old_state
 
     def _purge_anomalies(self, ceiling=None):
-        assert hasattr(self, 'purge_in_progress') == False
-        self.purge_in_progress = True
-
         ceiling = ceiling or self._ceiling()
         i = bisect(self._runtimes, ceiling)
+
         # print('Purged:', self.samples[i:])
         anomalies = self.anomalies + self.samples[i:]
-        self.__init__(self.name, self.samples[:i])
-        assert len(self.samples) == i
-        assert self.anomalies == []
+        samples = self.samples[:i]
+
+        self.__init__(self.name)
+        for sample in samples:
+            self._add(sample)
         self.anomalies = anomalies
-        
-        del self.purge_in_progress
+
+        if self.cv > 0.05:  # Coeficient of variation crossed 5% threshold
+            # print('purging again: ', self)
+            self._purge_anomalies()
 
     def _ceiling(self):
         return self.max - self.sd
@@ -123,7 +126,7 @@ class PerformanceTestSamples(object):
 
     @property
     def median(self):
-        return self.samples[self.count/2].runtime
+        return self.samples[self.count / 2].runtime
 
     @property
     def sd(self):
