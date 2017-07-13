@@ -39,7 +39,7 @@ class PerformanceTestSamples(object):
         self.samples = []
         self.anomalies = []
         self._runtimes = []
-        self.mean = 0
+        self.mean = 0.0
         self.S_runtime = 0  # For computing running variance
         for sample in samples or []:
             self.add(sample)
@@ -47,10 +47,8 @@ class PerformanceTestSamples(object):
     def __str__(self):
         return (
             '🏋⏱ {0.name!s} {0.count!r}📏  '
-            '∧={0.min!r} ∨={0.max!r} ⩥={0.range!r} '
-            'σ={0.sd:.0f} ¯={0.mean:.0f} '
-            '~={0.median!r} '
-            '⧮={0.cv:.2%} ⧱={0.spread:.2%}'
+            '∧={0.min!r} ∨={0.max!r} ⩥={0.range!r} ⧱={0.spread:.2%} '
+            'σ={0.sd:.0f} ¯={0.mean:.0f} ~={0.median!r} '
             .format(self) if self.samples else
             '🏋⏱ {0.name!s} {0.samples!r}📏 '.format(self))
 
@@ -58,7 +56,7 @@ class PerformanceTestSamples(object):
         assert isinstance(sample, Sample)
         old_stats = self._add(sample)
         # print(self, ' Added: ', sample)
-        if self.cv > 0.05:  # Coeficient of variation crossed 5% threshold
+        if self._sample_quality_is_low():
             if sample.runtime > self.mean:
                 self._undo_add(sample, old_stats)
             else:
@@ -78,31 +76,33 @@ class PerformanceTestSamples(object):
         return old_stats
 
     def _undo_add(self, sample, old_state):
-        # print('Rejected:', sample, self.cv)
+        # print('Rejected:', sample, self.spread)
         self.samples.remove(sample)
         self._runtimes.remove(sample.runtime)
         self.anomalies.append(sample)
         _, self.mean, self.S_runtime = old_state
 
-    def _purge_anomalies(self, ceiling=None):
-        ceiling = ceiling or self._ceiling()
-        i = bisect(self._runtimes, ceiling)
+    def _purge_anomalies(self):
+        i = bisect(self._runtimes, self._ceiling())
 
         # print('Purged:', self.samples[i:])
         anomalies = self.anomalies + self.samples[i:]
         samples = self.samples[:i]
 
-        self.__init__(self.name)
-        for sample in samples:
-            self._add(sample)
+        self.__init__(self.name)  # re-initialize
+        for sample in samples:  # and
+            self._add(sample)  # re-compute stats
         self.anomalies = anomalies
 
-        if self.cv > 0.05:  # Coeficient of variation crossed 5% threshold
+        if self._sample_quality_is_low():
             # print('purging again: ', self)
             self._purge_anomalies()
 
     def _ceiling(self):
         return self.max - self.sd
+
+    def _sample_quality_is_low(self):
+        return self.spread > 0.05
 
     @property
     def count(self):
@@ -130,7 +130,7 @@ class PerformanceTestSamples(object):
 
     @property
     def sd(self):
-        """Standard Deviation (ms)"""
+        """Standard Deviation (us)"""
         return (0 if self.count < 2 else
                 sqrt(self.S_runtime / (self.count - 1)))
 
@@ -147,18 +147,13 @@ class PerformanceTestSamples(object):
         return (k, M, S)
 
     @property
-    def cv(self):
-        """Coeficient of Variation (%)"""
-        return self.sd / self.mean
-
-    @property
     def range(self):
         return self.max - self.min
 
     @property
     def spread(self):
         """Sample Spread - range as (%) of mean value"""
-        return self.range / self.mean
+        return (self.range / self.mean) if self.mean else 0
 
 
 class PerformanceTestResult(object):
@@ -181,28 +176,38 @@ class PerformanceTestResult(object):
         self.name = csv_row[1]          # Name of the performance test
         self.num_samples = (            # Number of measurement samples taken
             int(csv_row[2]))
-        self.min = int(csv_row[3])      # Minimum runtime (ms)
-        self.max = int(csv_row[4])      # Maximum runtime (ms)
-        self.mean = int(csv_row[5])     # Mean (average) runtime (ms)
-        self.sd = float(csv_row[6])     # Standard Deviation (ms)
-        self.median = int(csv_row[7])   # Median runtime (ms)
+        self.min = int(csv_row[3])      # Minimum runtime (us)
+        self.max = int(csv_row[4])      # Maximum runtime (us)
+        self.mean = int(csv_row[5])     # Mean (average) runtime (us)
+        self.sd = float(csv_row[6])     # Standard Deviation (us)
+        self.median = int(csv_row[7])   # Median runtime (us)
         self.max_rss = (                # Maximum Resident Set Size (B)
             int(csv_row[8]) if len(csv_row) > 8 else None)
+        self.samples = None
 
     def __repr__(self):
         return (
             '<PerformanceTestResult name:{0.name!r} '
             'samples:{0.num_samples!r} min:{0.min!r} max:{0.max!r} '
-            'mean:{0.mean!r} sd:{0.sd!r} median:{0.median!r}>'.format(self))
+            'mean:{0.mean:.0f} sd:{0.sd:.0f} median:{0.median!r}>'
+            .format(self))
 
     def merge(self, r):
-        """Merging test results recomputes min and max.
-        The use case here is comparing tests results parsed from concatenated
+        """Merging test results recomputes min and max. If all samples are
+        avaliable, it recomputes all the statistics (excluding anomalies).
+        The use case here is comparing test results parsed from concatenated
         log files from multiple runs of benchmark driver.
         """
-        self.min = min(self.min, r.min)
-        self.max = max(self.max, r.max)
-        self.median, self.mean, self.sd = None, None, None
+        if self.samples and r.samples:
+            map(self.samples.add, r.samples.all_samples)
+            sams = self.samples
+            self.num_samples = sams.count
+            self.min, self.max, self.median, self.mean, self.sd = \
+            sams.min, sams.max, sams.median, sams.mean, sams.sd
+        else:
+            self.min = min(self.min, r.min)
+            self.max = max(self.max, r.max)
+            self.median, self.mean, self.sd = None, None, None
 
 
 class ResultComparison(object):
