@@ -19,6 +19,7 @@ import unittest
 from imp import load_source
 
 from test_utils import captured_output
+from compare_perf_tests import PerformanceTestResult
 # import Benchmark_Driver  # doesn't work because it misses '.py' extension
 Benchmark_Driver = load_source(
     'Benchmark_Driver', os.path.join(os.path.dirname(
@@ -102,17 +103,12 @@ class ArgsStub(object):
         self.filters = None
         self.tests = '/benchmarks/'
         self.optimization = 'O'
+        self.iterations = 1
 
 
 class SubprocessMock(object):
-    list_precommit = ('/benchmarks/Benchmark_O --list'.split(),
-                      'Enabled Tests:\tBenchmark1\n\tBenchmark2\n')
-    list_all_tests = (
-        '/benchmarks/Benchmark_O --list --run-all'.split(),
-        'Enabled Tests:\tBenchmark1\n\tBenchmark2\n\tBenchmark3\n')
-    responses = [list_precommit, list_all_tests]
+    """Mock for subprocess module's check_output method."""
     STDOUT = object()
-
     def __init__(self, responses=None):
         self.calls = []
         self.expected = []
@@ -133,7 +129,7 @@ class SubprocessMock(object):
 
     def record_and_respond(self, args, stdin, stdout, stderr, shell):
         _ = stdin, stdout, shell  # ignored in mock
-        assert stderr == self.STDOUT  # errors are redirected to STDOUT
+        assert stderr == self.STDOUT, 'Errors are NOT redirected to STDOUT'
         args = tuple(args)
         self.calls.append(args)
         return self.respond.get(args, '')
@@ -145,10 +141,10 @@ class SubprocessMock(object):
 
     def assert_called_all_expected(self):
         assert self.calls == self.expected, (
-            'Expected: {0}, Called: {1}'.format(self.expected, self.calls))
+            '\nExpected: {0}, \n  Called: {1}'.format(self.expected, self.calls))
 
 
-class TestBenchmarkDriver(unittest.TestCase):
+class TestBenchmarkDriverInitialization(unittest.TestCase):
     def setUp(self):
         self.args = ArgsStub()
         self.subprocess_mock = SubprocessMock()
@@ -164,28 +160,105 @@ class TestBenchmarkDriver(unittest.TestCase):
             '/path/Benchmark_Suffix')
 
     def test_gets_list_of_precommit_benchmarks(self):
-        self.subprocess_mock.expect(*SubprocessMock.list_precommit)
+        self.subprocess_mock.expect(
+            '/benchmarks/Benchmark_O --list'.split(),
+            'Enabled Tests:\tBenchmark1\n\tBenchmark2\n')
         driver = BenchmarkDriver(
             self.args, _subprocess=self.subprocess_mock)
         self.subprocess_mock.assert_called_all_expected()
         self.assertEquals(driver.tests,
                           ['Benchmark1', 'Benchmark2'])
+        self.assertEquals(driver.all_tests,
+                          ['Benchmark1', 'Benchmark2'])
+
+    list_all_tests = (
+        '/benchmarks/Benchmark_O --list --run-all'.split(),
+        'Enabled Tests:\tBenchmark1\n\tBenchmark2\n\tBenchmark3\n')
 
     def test_gets_list_of_all_benchmarks_when_benchmarks_args_exist(self):
         self.args.benchmarks = '1 Benchmark3 bogus'.split()
-        self.subprocess_mock.expect(*SubprocessMock.list_all_tests)
+        self.subprocess_mock.expect(*self.list_all_tests)
         driver = BenchmarkDriver(
             self.args, _subprocess=self.subprocess_mock)
         self.subprocess_mock.assert_called_all_expected()
         self.assertEquals(driver.tests, ['1', 'Benchmark3'])
+        self.assertEquals(driver.all_tests,
+                          ['Benchmark1', 'Benchmark2', 'Benchmark3'])
 
     def test_filters_benchmarks_by_pattern(self):
         self.args.filters = '-f .+3'.split()
-        self.subprocess_mock.expect(*SubprocessMock.list_all_tests)
+        self.subprocess_mock.expect(*self.list_all_tests)
         driver = BenchmarkDriver(
             self.args, _subprocess=self.subprocess_mock)
         self.subprocess_mock.assert_called_all_expected()
         self.assertEquals(driver.tests, ['Benchmark3'])
+        self.assertEquals(driver.all_tests,
+                          ['Benchmark1', 'Benchmark2', 'Benchmark3'])
+
+
+class LogParserStub(object):
+    results_from_string_called = False
+
+    @staticmethod
+    def results_from_string(log_contents):
+        LogParserStub.results_from_string_called = True
+        r = PerformanceTestResult('3,b1,1,123,123,123,0,123'.split(','))
+        # r.samples =
+        return {'b1': r}
+
+class TestBenchmarkDriverRunningTests(unittest.TestCase):
+    def setUp(self):
+        self.args = ArgsStub()
+        self.parser_stub = LogParserStub()
+        self.subprocess_mock = SubprocessMock()
+        self.subprocess_mock.expect(
+            '/benchmarks/Benchmark_O --list'.split(),
+            'Enabled Tests:\tb1\n')
+        self.driver = BenchmarkDriver(
+            self.args, _subprocess=self.subprocess_mock,
+            parser=self.parser_stub)
+
+    def test_sample_benchmark_multiple_times(self):
+        self.driver.args.iterations = 3
+        self.driver.run('b1')
+        self.subprocess_mock.assert_called_with(
+            ('/benchmarks/Benchmark_O', 'b1', '--num-samples=3'))
+        self.driver.run('b2', num_samples=5)
+        self.subprocess_mock.assert_called_with(
+            ('/benchmarks/Benchmark_O', 'b2', '--num-samples=5'))
+
+    def test_run_benchmark_with_specified_number_of_iterations(self):
+        self.driver.run('b', num_iters=7)
+        self.subprocess_mock.assert_called_with(
+            ('/benchmarks/Benchmark_O', 'b', '--num-iters=7'))
+
+    def test_run_benchmark_in_verbose_mode(self):
+        self.driver.run('b', verbose=True)
+        self.subprocess_mock.assert_called_with(
+            ('/benchmarks/Benchmark_O', 'b', '--verbose'))
+
+    def test_parse_results_from_running_benchmarks(self):
+        self.driver.run('b')
+        self.assertTrue(self.parser_stub.results_from_string_called)
+
+    def test_measure_memory_used_by_test_on_darwin(self):
+        self.driver.args.measure_memory = True
+        self.subprocess_mock.expect(
+            'time -lp /benchmarks/Benchmark_O b1'.split(),
+            '  12345678  maximum resident set size' + ''.join(['\n']*14))
+        r = self.driver.run('b1', measure_memory=True, platform='darwin')
+        self.subprocess_mock.assert_called_all_expected()
+        self.assertEquals(r.max_rss, 12345678)
+
+    def test_measure_memory_used_by_test_on_linux(self):
+        self.driver.args.measure_memory = True
+        self.subprocess_mock.expect(
+            'time --verbose /benchmarks/Benchmark_O b1'.split(),
+            '    Maximum resident set size (kbytes): 12345' +
+            ''.join(['\n']*14))
+        r = self.driver.run('b1', measure_memory=True, platform='linux2')
+        self.subprocess_mock.assert_called_all_expected()
+        self.assertEquals(r.max_rss, 12641280)
 
 
 if __name__ == '__main__':

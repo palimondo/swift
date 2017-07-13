@@ -25,14 +25,38 @@ import time
 import urllib
 import urllib2
 
+try:
+    from compare_perf_tests import LogParser
+except ImportError:
+    pass
+
 DRIVER_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
 class BenchmarkDriver(object):
-    def __init__(self, args, tests=None, _subprocess=None):
+    def __init__(self, args, tests=None, _subprocess=None, parser=None):
         self.args = args
         self._subprocess = _subprocess or subprocess
+        self.all_tests = []
         self.tests = tests or self._get_tests()
+        self._validateLogParserImport()
+        self.parser = parser or LogParser()
+        self.results = {}
+
+    def _validateLogParserImport(self):
+        """Validate LogParser was imported from compare_perf_tests.
+        If not, try to recover by dynamically importing it using `swift-repo`
+        argument.
+        """
+        if 'compare_perf_tests' in sys.modules:
+            return
+        from imp import load_source
+        compare_perf_tests = load_source(
+            'compare_perf_tests',
+            os.path.join(self.args.swift_repo,
+                         'benchmark/scripts/compare_perf_tests.py'))
+        global LogParser
+        LogParser = compare_perf_tests.LogParser
 
     def _invoke(self, cmd):
         return self._subprocess.check_output(
@@ -44,28 +68,71 @@ class BenchmarkDriver(object):
                             "Benchmark_" + self.args.optimization)
 
     @property
-    def _list_benchmarks_command(self):
+    def _cmd_list_benchmarks(self):
         return [self.test_harness, '--list'] + (
             ['--run-all'] if (self.args.benchmarks or self.args.filters) else
             [])
 
     def _get_tests(self):
         """Return a list of performance tests to run"""
-        tests = self._invoke(self._list_benchmarks_command).split()[2:]
+        self.all_tests = self._invoke(self._cmd_list_benchmarks).split()[2:]
         if self.args.filters:
-            return self._tests_matching_patterns(tests)
+            return self._tests_matching_patterns()
         if self.args.benchmarks:
-            return self._tests_by_name_or_ordinal(tests)
-        return tests
+            return self._tests_by_name_or_ordinal()
+        return self.all_tests
 
-    def _tests_matching_patterns(self, tests):
+    def _tests_matching_patterns(self):
         regexes = [re.compile(pattern) for pattern in self.args.filters]
         return sorted(list(set([name for pattern in regexes
-                                for name in tests if pattern.match(name)])))
+                                for name in self.all_tests
+                                if pattern.match(name)])))
 
-    def _tests_by_name_or_ordinal(self, tests):
+    def _tests_by_name_or_ordinal(self):
+        tests = list(self.all_tests)  # copy the tests
         tests.extend(map(str, range(1, len(tests) + 1)))  # ordinal numbers
         return sorted(list(set(tests).intersection(set(self.args.benchmarks))))
+
+    def run(self, test, num_samples=None, num_iters=None,
+            verbose=None, measure_memory=False, platform=None):
+        num_samples = num_samples or self.args.iterations
+        num_iters = num_iters or 0  # automatically determine N to run for 1s
+        platform = platform or sys.platform
+
+        cmd = self._cmd_run(
+            test, num_samples, num_iters, verbose, measure_memory, platform)
+        output = self._invoke(cmd)
+        result = self.parser.results_from_string(output).items()[0][1]
+        if measure_memory:
+            result.max_rss = self._parse_max_rss(output)
+        return result
+
+    def _cmd_run(self, test, num_samples, num_iters,
+                 verbose, measure_memory, platform):
+        cmd = [self.test_harness, test]
+        if num_samples > 1:
+            cmd.append('--num-samples={0}'.format(num_samples))
+        if num_iters > 1:
+            cmd.append('--num-iters={0}'.format(num_iters))
+        if verbose:
+            cmd.append('--verbose')
+        if measure_memory:
+            cmd = (['time',
+                    '-lp' if platform.startswith('darwin') else
+                    '--verbose' if platform.startswith('linux') else
+                    sys.exit('Unsupported platform')] + cmd)
+        return cmd
+
+    # BSD and GNU versions of `time` have different output format.
+    # https://unix.stackexchange.com/a/222583
+    max_rss_re = re.compile(
+        r'\s*(\d+)?\s*[Mm]aximum resident set size(?:[^\d]*(\d+))?')
+
+    def _parse_max_rss(self, output):
+        m = self.max_rss_re.match(output.split('\n')[-15])
+        return (int(m.group(1)) if m.group(1) else
+                int(m.group(2)) * 1024)  # GNU time reports in kbytes
+
 
 
 def parse_results(res, optset):
@@ -465,7 +532,8 @@ def parse_args(args):
         help='log results to directory (default: no logging)')
     run_parser.add_argument(
         '--swift-repo',
-        help='absolute path to Swift source repo for branch comparison')
+        help='absolute path to Swift source repo for branch comparison',
+        required=('compare_perf_tests' not in sys.modules))
     run_parser.set_defaults(func=run)
 
     compare_parser = subparsers.add_parser(
