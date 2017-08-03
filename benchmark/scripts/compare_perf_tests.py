@@ -37,7 +37,7 @@ class PerformanceTestSamples(object):
     def __init__(self, name, samples=None):
         self.name = name  # Name of the performance test
         self.samples = []
-        self.anomalies = []
+        self.outliers = []
         self._runtimes = []
         self.mean = 0.0
         self.S_runtime = 0  # For computing running variance
@@ -48,61 +48,42 @@ class PerformanceTestSamples(object):
         return (
             '🏋⏱ {0.name!s} {0.count!r}📏  '
             '∧={0.min!r} ∨={0.max!r} ⩥={0.range!r} ⧱={0.spread:.2%} '
-            'σ={0.sd:.0f} ¯={0.mean:.0f} ~={0.median!r} '
+            'σ={0.sd:.0f} ⧮={0.cv:.2%} ¯={0.mean:.0f} ~={0.median!r} '
+            'Q1={0.q1!r} Q3={0.q3!r} IQR={0.iqr!r}'
             .format(self) if self.samples else
             '🏋⏱ {0.name!s} {0.samples!r}📏 '.format(self))
 
     def add(self, sample):
         assert isinstance(sample, Sample)
-        old_stats = self._add(sample)
-        # print(self, ' Added: ', sample)
-        if self._sample_quality_is_low():
-            if sample.runtime > self.mean:
-                self._undo_add(sample, old_stats)
-            else:
-                self._purge_anomalies()
-
-    def _add(self, sample):
-        old_stats = self._update_stats(sample)
+        self._update_stats(sample)
         i = bisect(self._runtimes, sample.runtime)
         self._runtimes.insert(i, sample.runtime)
         self.samples.insert(i, sample)
-        return old_stats
 
     def _update_stats(self, sample):
         old_stats = (self.count, self.mean, self.S_runtime)
         _, self.mean, self.S_runtime = (
             self.running_mean_variance(old_stats, sample.runtime))
-        return old_stats
 
-    def _undo_add(self, sample, old_state):
-        # print('Rejected:', sample, self.spread)
-        self.samples.remove(sample)
-        self._runtimes.remove(sample.runtime)
-        self.anomalies.append(sample)
-        _, self.mean, self.S_runtime = old_state
+    def exclude_outliers(self):
+        """Excludes outliers by applying Interquartile Range Rule,
+        moving samples outside of the inner fences
+        (Q1 - 1.5*IQR and Q3 + 1.5*IQR) into outliers list and recomputing
+        statistics for the remaining sample population.
 
-    def _purge_anomalies(self):
-        i = bisect(self._runtimes, self._ceiling())
+        Experimentally, this rule seems to perform well-enough on the
+        benchmark runtimes.
+        """
+        lo = bisect(self._runtimes, int(self.q1 - 1.5 * self.iqr))
+        hi = bisect(self._runtimes, int(self.q3 + 1.5 * self.iqr))
 
-        # print('Purged:', self.samples[i:])
-        anomalies = self.anomalies + self.samples[i:]
-        samples = self.samples[:i]
+        outliers =  self.samples[:lo] + self.samples[hi:]
+        samples = self.samples[lo:hi]
 
         self.__init__(self.name)  # re-initialize
         for sample in samples:  # and
-            self._add(sample)  # re-compute stats
-        self.anomalies = anomalies
-
-        if self._sample_quality_is_low():
-            # print('purging again: ', self)
-            self._purge_anomalies()
-
-    def _ceiling(self):
-        return self.max - self.sd
-
-    def _sample_quality_is_low(self):
-        return self.spread > 0.05
+            self.add(sample)  # re-compute stats
+        self.outliers = outliers
 
     @property
     def count(self):
@@ -110,11 +91,11 @@ class PerformanceTestSamples(object):
 
     @property
     def num_samples(self):
-        return len(self.samples) + len(self.anomalies)
+        return len(self.samples) + len(self.outliers)
 
     @property
     def all_samples(self):
-        return sorted(self.samples + self.anomalies, key=lambda s: s.i)
+        return sorted(self.samples + self.outliers, key=lambda s: s.i)
 
     @property
     def min(self):
@@ -127,6 +108,21 @@ class PerformanceTestSamples(object):
     @property
     def median(self):
         return self.samples[self.count / 2].runtime
+
+    @property
+    def q1(self):
+        """First Quartile (25th Percentile)"""
+        return self.samples[self.count / 4].runtime
+
+    @property
+    def q3(self):
+        """Third Quartile (75th Percentile)"""
+        return self.samples[(self.count / 2) + (self.count / 4)].runtime
+
+    @property
+    def iqr(self):
+        """Interquartile Range"""
+        return self.q3 - self.q1
 
     @property
     def sd(self):
@@ -145,6 +141,11 @@ class PerformanceTestSamples(object):
         M = M_ + (x - M_) / k
         S = S_ + (x - M_) * (x - M)
         return (k, M, S)
+
+    @property
+    def cv(self):
+        """Coeficient of Variation (%)"""
+        return (self.sd / self.mean) if self.mean else 0
 
     @property
     def range(self):
@@ -194,7 +195,7 @@ class PerformanceTestResult(object):
 
     def merge(self, r):
         """Merging test results recomputes min and max. If all samples are
-        avaliable, it recomputes all the statistics (excluding anomalies).
+        avaliable, it recomputes all the statistics.
         The use case here is comparing test results parsed from concatenated
         log files from multiple runs of benchmark driver.
         """
@@ -255,6 +256,7 @@ class LogParser(object):
         r = PerformanceTestResult(columns)
         if self.samples:
             r.samples = PerformanceTestSamples(r.name, self.samples)
+            r.samples.exclude_outliers()
         self.results.append(r)
         self.num_iters, self.samples = 1, []
 

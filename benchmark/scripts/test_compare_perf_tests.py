@@ -53,95 +53,108 @@ class TestSample(unittest.TestCase):
 
 class TestPerformanceTestSamples(unittest.TestCase):
     def setUp(self):
-        self.rs = [Sample(*map(int, line.split())) for line in
-                   '0 316 233, 1 4417 208, 2 4745 216, 3 4867 208, '
-                   '4 4934 197, 5 5209 205, 6 4271 204, 7 4971 208, '
-                   '8 5276 206, 9 4596 221, 10 5278 198'.split(',')]
-        self.samples = PerformanceTestSamples('DropFirstAnyCollection')
-        self.samples.add(self.rs[8])
+        self.samples = PerformanceTestSamples('B1')
+        self.samples.add(Sample(7, 42, 1000))
 
     def test_has_name(self):
-        self.assertEquals(self.samples.name, 'DropFirstAnyCollection')
+        self.assertEquals(self.samples.name, 'B1')
 
     def test_stores_samples(self):
         self.assertEquals(self.samples.count, 1)
         s = self.samples.samples[0]
         self.assertTrue(isinstance(s, Sample))
-        self.assertEquals(s.i, 8)
-        self.assertEquals(s.num_iters, 5276)
-        self.assertEquals(s.runtime, 206)
+        self.assertEquals(s.i, 7)
+        self.assertEquals(s.num_iters, 42)
+        self.assertEquals(s.runtime, 1000)
 
-    def test_computes_min_max_median(self):
-        self.assertEquals(self.samples.min, 206)
-        self.assertEquals(self.samples.max, 206)
-        self.assertEquals(self.samples.median, 206)
-        self.samples.add(self.rs[1])
-        self.assertEquals(self.samples.min, 206)
-        self.assertEquals(self.samples.max, 208)
-        self.assertEquals(self.samples.median, 208)
-        self.samples.add(self.rs[6])
-        self.assertEquals(self.samples.min, 204)
-        self.assertEquals(self.samples.max, 208)
-        self.assertEquals(self.samples.median, 206)
+    def assertEqualFiveNumberSummary(self, ss, expected_fns):
+        e_min, e_q1, e_median, e_q3, e_max = expected_fns
+        self.assertEquals(ss.min, e_min)
+        self.assertEquals(ss.q1, e_q1)
+        self.assertEquals(ss.median, e_median)
+        self.assertEquals(ss.q3, e_q3)
+        self.assertEquals(ss.max, e_max)
+
+    def test_computes_five_number_summary(self):
+        self.assertEqualFiveNumberSummary(
+            self.samples, (1000, 1000, 1000, 1000, 1000))
+        self.samples.add(Sample(2, 1, 1100))
+        self.assertEqualFiveNumberSummary(
+            self.samples, (1000, 1000, 1100, 1100, 1100))
+        self.samples.add(Sample(3, 1, 1050))
+        self.assertEqualFiveNumberSummary(
+            self.samples, (1000, 1000, 1050, 1050, 1100))
+        self.samples.add(Sample(4, 1, 1025))
+        self.assertEqualFiveNumberSummary(
+            self.samples, (1000, 1025, 1050, 1100, 1100))
+        self.samples.add(Sample(5, 1, 1075))
+        self.assertEqualFiveNumberSummary(
+            self.samples, (1000, 1025, 1050, 1075, 1100))
+
+    def test_computes_inter_quartile_range(self):
+        self.assertEquals(self.samples.iqr, 0)
+        self.samples.add(Sample(2, 1, 1025))
+        self.samples.add(Sample(3, 1, 1050))
+        self.samples.add(Sample(4, 1, 1075))
+        self.samples.add(Sample(5, 1, 1100))
+        self.assertEquals(self.samples.iqr, 50)
 
     def assertEqualStats(self, stats, expected_stats):
         for actual, expected in zip(stats, expected_stats):
             self.assertAlmostEquals(actual, expected, places=2)
 
-    def test_computes_mean_sd(self):
+    def test_computes_mean_sd_cv(self):
+        ss = self.samples
         self.assertEqualStats(
-            (self.samples.mean, self.samples.sd),
-            (206.0, 0.0))
-        self.samples.add(self.rs[1])
+            (ss.mean, ss.sd, ss.cv), (1000.0, 0.0, 0.0))
+        self.samples.add(Sample(2, 1, 1100))
         self.assertEqualStats(
-            (self.samples.mean, self.samples.sd),
-            (207.0, 1.41))
+            (ss.mean, ss.sd, ss.cv), (1050.0, 70.71, 6.7 / 100))
 
-    def test_computes_range_spread(self):
+    def test_computes_range_spread_irq(self):
+        ss = self.samples
         self.assertEqualStats(
-            (self.samples.range, self.samples.spread), (0, 0))
-        self.samples.add(self.rs[2])
+            (ss.range, ss.spread), (0, 0))
+        self.samples.add(Sample(2, 1, 1100))
         self.assertEqualStats(
-            (self.samples.range, self.samples.spread), (10,  4.77 / 100))
+            (ss.range, ss.spread), (100, 9.52 / 100))
 
     def test_init_with_samples(self):
-        self.samples = PerformanceTestSamples('Lots', self.rs[5:9])
-        self.assertEquals(self.samples.count, 4)
+        self.samples = PerformanceTestSamples(
+            'B2', [Sample(0, 1, 1000), Sample(1, 1, 1100)])
+        self.assertEquals(self.samples.count, 2)
         self.assertEqualStats(
             (self.samples.mean, self.samples.sd,
              self.samples.range, self.samples.spread),
-            (205.75, 1.71, 4, 1.94 / 100))
+            (1050.0, 70.71, 100, 9.52 / 100))
 
     def test_can_handle_zero_runtime(self):
-        self.assertEquals(self.samples.count, 1)
-        zero = Sample(0, 1, 0)
-        self.samples.add(zero)
-        self.assertEquals(self.samples.count, 1)
-        self.assertEquals(self.samples.samples[0], zero)
+        # guard against dividing by 0
+        self.samples = PerformanceTestSamples('Zero')
+        self.samples.add(Sample(0, 1, 0))
         self.assertEqualStats(
-            (self.samples.mean, self.samples.sd,
+            (self.samples.mean, self.samples.sd, self.samples.cv,
              self.samples.range, self.samples.spread),
-            (0, 0, 0, 0 / 100))
+            (0, 0, 0.0, 0, 0.0))
 
-    def test_rejects_anomalous_samples(self):
-        self.assertEquals(self.samples.count, 1)
-        self.samples.add(self.rs[0])
-        self.assertEquals(self.samples.count, 1)
-        self.assertEquals(self.samples.anomalies[0], self.rs[0])
+    def test_excludes_outliers(self):
+        ss = [Sample(*map(int, line.split())) for line in
+              '0 1 1000, 1 1 1025, 2 1 1050, 3 1 1075, 4 1 1100, '
+              '5 1 1000, 6 1 1025, 7 1 1050, 8 1 1075, 9 1 1100, '
+              '10 1 1050, 11 1 949, 12 1 1151'.split(',')]
+        self.samples = PerformanceTestSamples('Outliers', ss)
+        self.assertEquals(self.samples.count, 13)
+        self.assertEqualStats(
+            (self.samples.mean, self.samples.sd), (1050, 52.36))
 
-    def test_purges_anomalies(self):
-        self.samples = PerformanceTestSamples('Anomaly', self.rs[:1])
-        self.assertEquals(self.samples.count, 1)
-        self.samples.add(self.rs[1])
-        self.assertEquals(self.samples.count, 1)
-        self.assertEquals(self.samples.anomalies[0], self.rs[0])
+        self.samples.exclude_outliers()
 
-    def test_purges_anomalies_extreme(self):
-        self.samples = PerformanceTestSamples('ExtremeAnomaly', self.rs)
-        self.assertEquals(self.samples.count, 5)
-        self.samples.add(Sample(42, 42, 188))
-        self.assertEquals(self.samples.count, 1)
-        self.assertEquals(len(self.samples.anomalies), 11)
+        self.assertEquals(self.samples.count, 11)
+        self.assertEquals(self.samples.outliers, ss[11:])
+        self.assertEqualFiveNumberSummary(
+            self.samples, (1000, 1025, 1050, 1075, 1100))
+        self.assertEqualStats(
+            (self.samples.mean, self.samples.sd), (1050, 35.36))
 
 
 class TestPerformanceTestResult(unittest.TestCase):
@@ -163,7 +176,7 @@ class TestPerformanceTestResult(unittest.TestCase):
         self.assertEquals(
             str(r),
             '<PerformanceTestResult name:\'AngryPhonebook\' samples:20 '
-            'min:10664 max:12933 mean:11035 sd:576.0 median:10884>'
+            'min:10664 max:12933 mean:11035 sd:576 median:10884>'
         )
 
     def test_merge(self):
@@ -321,6 +334,38 @@ Totals,2,381367,394937,386386,0,0"""
         self.assertEquals(results[1].samples.all_samples,
                           [(0, 1, 369900), (1, 1, 381039), (2, 1, 371043)])
 
+    def test_excludes_outliers_from_samples(self):
+        verbose_log = """Running DropFirstAnySeqCntRangeLazy for 10 samples.
+    Measuring with scale 2.
+    Sample 0,455
+    Measuring with scale 2.
+    Sample 1,203
+    Measuring with scale 2.
+    Sample 2,205
+    Measuring with scale 2.
+    Sample 3,207
+    Measuring with scale 2.
+    Sample 4,208
+    Measuring with scale 2.
+    Sample 5,206
+    Measuring with scale 2.
+    Sample 6,205
+    Measuring with scale 2.
+    Sample 7,206
+    Measuring with scale 2.
+    Sample 8,208
+    Measuring with scale 2.
+    Sample 9,184
+65,DropFirstAnySeqCntRangeLazy,10,184,455,228,79,206
+"""
+        parser = LogParser()
+        result = parser.parse_results(verbose_log.split('\n'))[0]
+        print result
+        print result.samples
+        self.assertEquals(result.num_samples, 10)
+        self.assertEquals(result.samples.count, 8)
+        self.assertEquals(len(result.samples.outliers), 2)
+
     def test_parse_results_csv(self):
         """Ignores header row, empty lines and Totals row"""
         log = """#,TEST,SAMPLES,MIN(us),MAX(us),MEAN(us),SD(us),MEDIAN(us)
@@ -384,15 +429,15 @@ Totals,269,67351871,70727022,68220188,0,0,0"""
         result = results['Array2D']
         self.assertTrue(isinstance(result, PerformanceTestResult))
         self.assertEquals(result.min, 350815)
-        self.assertEquals(result.max, 364245)
-        self.assertEquals(result.median, 358817)
-        self.assertAlmostEquals(result.sd, 5311.94, places=2)
-        self.assertAlmostEquals(result.mean, 357734.33, places=2)
-        self.assertEquals(result.num_samples, 6)
+        self.assertEquals(result.max, 376131)
+        self.assertEquals(result.median, 363094)
+        self.assertAlmostEquals(result.sd, 8443.37, places=2)
+        self.assertAlmostEquals(result.mean, 361463.25, places=2)
+        self.assertEquals(result.num_samples, 8)
         samples = result.samples
         self.assertTrue(isinstance(samples, PerformanceTestSamples))
         self.assertEquals(samples.num_samples, 8)
-        self.assertEquals(samples.count, 6)
+        self.assertEquals(samples.count, 8)
 
 
 class TestTestComparator(OldAndNewLog):
