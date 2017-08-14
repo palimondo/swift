@@ -156,6 +156,17 @@ class TestPerformanceTestSamples(unittest.TestCase):
         self.assertEqualStats(
             (self.samples.mean, self.samples.sd), (1050, 35.36))
 
+    def test_excludes_outliers_zero_IQR(self):
+        self.samples = PerformanceTestSamples('Tight')
+        self.samples.add(Sample(0, 2, 23))
+        self.samples.add(Sample(1, 2, 18))
+        self.samples.add(Sample(2, 2, 18))
+        self.assertEquals(self.samples.iqr, 0)
+
+        self.samples.exclude_outliers()
+
+        self.assertEquals(self.samples.count, 2)
+
 
 class TestPerformanceTestResult(unittest.TestCase):
     def test_init(self):
@@ -360,8 +371,6 @@ Totals,2,381367,394937,386386,0,0"""
 """
         parser = LogParser()
         result = parser.parse_results(verbose_log.split('\n'))[0]
-        print result
-        print result.samples
         self.assertEquals(result.num_samples, 10)
         self.assertEquals(result.samples.count, 8)
         self.assertEquals(len(result.samples.outliers), 2)

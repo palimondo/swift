@@ -18,12 +18,11 @@ from __future__ import print_function
 import argparse
 import re
 import sys
-from bisect import bisect
+from bisect import bisect, bisect_right, bisect_left
 from collections import namedtuple
 from math import sqrt
 
 
-# Sample = namedtuple('Sample', 'i num_iters runtime')
 class Sample(namedtuple('Sample', 'i num_iters runtime')):
     def __repr__(self):
         return 's({0.i!r}, {0.num_iters!r}, {0.runtime!r})'.format(self)
@@ -74,8 +73,8 @@ class PerformanceTestSamples(object):
         Experimentally, this rule seems to perform well-enough on the
         benchmark runtimes.
         """
-        lo = bisect(self._runtimes, int(self.q1 - 1.5 * self.iqr))
-        hi = bisect(self._runtimes, int(self.q3 + 1.5 * self.iqr))
+        lo = bisect_left(self._runtimes, int(self.q1 - 1.5 * self.iqr))
+        hi = bisect_right(self._runtimes, int(self.q3 + 1.5 * self.iqr))
 
         outliers =  self.samples[:lo] + self.samples[hi:]
         samples = self.samples[lo:hi]
@@ -272,12 +271,6 @@ class LogParser(object):
         (lambda self, i, runtime:
          self.samples.append(
              Sample(int(i), int(self.num_iters), int(runtime)))),
-
-        # FIXME remove pre-processed sample format
-        # (I have manually reformatted logs for importing into Numbers:)
-        re.compile(r'(\d+)\t(\d+)\t(\d+)'):
-        (lambda self, i, num_iters, runtime:
-         self.samples.append((int(i), int(num_iters), int(runtime))))
     }
 
     def parse_results(self, lines):
