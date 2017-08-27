@@ -13,6 +13,7 @@
 #
 # ===---------------------------------------------------------------------===//
 
+import logging
 import sys
 
 from StringIO import StringIO
@@ -28,3 +29,19 @@ def captured_output():
         yield sys.stdout, sys.stderr
     finally:
         sys.stdout, sys.stderr = old_out, old_err
+
+
+class MockLoggingHandler(logging.Handler):
+    """Mock logging handler to check for expected logs."""
+
+    def __init__(self, *args, **kwargs):
+        self.reset()
+        super(MockLoggingHandler, self).__init__(*args, **kwargs)
+
+    def emit(self, record):
+        self.messages[record.levelname.lower()].append(record.getMessage())
+
+    def reset(self):
+        self.messages = {
+            'debug': [], 'info': [], 'warning': [], 'error': [], 'critical': []
+        }

@@ -13,13 +13,16 @@
 #
 # ===---------------------------------------------------------------------===//
 
+import logging
 import os
 import unittest
 
 from imp import load_source
 
-from test_utils import captured_output
 from compare_perf_tests import PerformanceTestResult
+from test_utils import MockLoggingHandler
+from test_utils import captured_output
+
 # import Benchmark_Driver  # doesn't work because it misses '.py' extension
 Benchmark_Driver = load_source(
     'Benchmark_Driver', os.path.join(os.path.dirname(
@@ -27,6 +30,8 @@ Benchmark_Driver = load_source(
 # from Benchmark_Driver import parse_args
 parse_args = Benchmark_Driver.parse_args
 BenchmarkDriver = Benchmark_Driver.BenchmarkDriver
+BenchmarkDoctor = Benchmark_Driver.BenchmarkDoctor
+LoggingReportFormatter = Benchmark_Driver.LoggingReportFormatter
 
 
 class Test_parse_args(unittest.TestCase):
@@ -45,7 +50,7 @@ class Test_parse_args(unittest.TestCase):
     def test_command_help_lists_commands(self):
         with captured_output() as (out, _):
             self.assertRaises(SystemExit, parse_args, ['-h'])
-        self.assert_contains(['COMMAND', 'run', 'compare', 'submit'],
+        self.assert_contains(['COMMAND', 'run', 'compare', 'submit', 'check'],
                              out.getvalue())
 
     def test_run_benchmarks_by_name_or_ordinal(self):
@@ -106,9 +111,7 @@ class ArgsStub(object):
         self.iterations = 1
 
 
-class SubprocessMock(object):
-    """Mock for subprocess module's check_output method."""
-    STDOUT = object()
+class Mock(object):
     def __init__(self, responses=None):
         self.calls = []
         self.expected = []
@@ -117,22 +120,10 @@ class SubprocessMock(object):
         for call_args, response in responses:
             self.expect(call_args, response)
 
-        def _check_output(args, stdin=None, stdout=None, stderr=None,
-                          shell=False):
-            return self.record_and_respond(args, stdin, stdout, stderr, shell)
-        self.check_output = _check_output
-
     def expect(self, call_args, response):
         call_args = tuple(call_args)
         self.expected.append(call_args)
         self.respond[call_args] = response
-
-    def record_and_respond(self, args, stdin, stdout, stderr, shell):
-        _ = stdin, stdout, shell  # ignored in mock
-        assert stderr == self.STDOUT, 'Errors are NOT redirected to STDOUT'
-        args = tuple(args)
-        self.calls.append(args)
-        return self.respond.get(args, '')
 
     def assert_called_with(self, expected_args):
         expected_args = tuple(expected_args)
@@ -141,7 +132,28 @@ class SubprocessMock(object):
 
     def assert_called_all_expected(self):
         assert self.calls == self.expected, (
-            '\nExpected: {0}, \n  Called: {1}'.format(self.expected, self.calls))
+            '\nExpected: {0}, \n  Called: {1}'.format(
+                self.expected, self.calls))
+
+
+class SubprocessMock(Mock):
+    """Mock for subprocess module's `check_output` method."""
+    STDOUT = object()
+
+    def __init__(self, responses=None):
+        super(SubprocessMock, self).__init__()
+
+        def _check_output(args, stdin=None, stdout=None, stderr=None,
+                          shell=False):
+            return self.record_and_respond(args, stdin, stdout, stderr, shell)
+        self.check_output = _check_output
+
+    def record_and_respond(self, args, stdin, stdout, stderr, shell):
+        # _ = stdin, stdout, shell  # ignored in mock
+        assert stderr == self.STDOUT, 'Errors are NOT redirected to STDOUT'
+        args = tuple(args)
+        self.calls.append(args)
+        return self.respond.get(args, '')
 
 
 class TestBenchmarkDriverInitialization(unittest.TestCase):
@@ -206,6 +218,7 @@ class LogParserStub(object):
         # r.samples =
         return {'b1': r}
 
+
 class TestBenchmarkDriverRunningTests(unittest.TestCase):
     def setUp(self):
         self.args = ArgsStub()
@@ -241,11 +254,13 @@ class TestBenchmarkDriverRunningTests(unittest.TestCase):
         self.driver.run('b')
         self.assertTrue(self.parser_stub.results_from_string_called)
 
+    # BSD and GNU versions of `time` have different output format.
+    # See https://unix.stackexchange.com/a/222583
     def test_measure_memory_used_by_test_on_darwin(self):
         self.driver.args.measure_memory = True
         self.subprocess_mock.expect(
             'time -lp /benchmarks/Benchmark_O b1'.split(),
-            '  12345678  maximum resident set size' + ''.join(['\n']*14))
+            '  12345678  maximum resident set size' + ''.join(['\n'] * 14))
         r = self.driver.run('b1', measure_memory=True, platform='darwin')
         self.subprocess_mock.assert_called_all_expected()
         self.assertEquals(r.max_rss, 12345678)
@@ -255,10 +270,143 @@ class TestBenchmarkDriverRunningTests(unittest.TestCase):
         self.subprocess_mock.expect(
             'time --verbose /benchmarks/Benchmark_O b1'.split(),
             '    Maximum resident set size (kbytes): 12345' +
-            ''.join(['\n']*14))
+            ''.join(['\n'] * 14))
         r = self.driver.run('b1', measure_memory=True, platform='linux2')
         self.subprocess_mock.assert_called_all_expected()
         self.assertEquals(r.max_rss, 12641280)
+
+
+class BenchmarkDriverMock(Mock):
+    """Mock for BenchmarkDriver's `run` method"""
+    def __init__(self, tests, responses=None):
+        super(BenchmarkDriverMock, self).__init__(responses)
+        self.tests = tests
+        self.args = ArgsStub()
+        self.results = {}
+
+        def _run(test, num_samples=None, num_iters=None,
+                 verbose=None, measure_memory=False, platform=None):
+            return self.record_and_respond(test, num_samples, num_iters,
+                                           verbose, measure_memory, platform)
+        self.run = _run
+
+    def record_and_respond(self, test, num_samples, num_iters,
+                           verbose, measure_memory, platform):
+        args = (
+            test, num_samples, num_iters, verbose, measure_memory, platform)
+        self.calls.append(args)
+        return self.respond.get(args, '')
+
+
+class TestLoggingReportFormatter(unittest.TestCase):
+    def test_plain_log_format(self):
+        lr = logging.makeLogRecord({
+            'name': 'Base.category', 'level': logging.DEBUG,
+            'levelname': 'DEBUG', 'msg': 'Hi!'})
+        f = LoggingReportFormatter()
+        self.assertEquals(f.format(lr), 'DEBUG category: Hi!')
+
+    def test_colored_log_format(self):
+        def record(level, level_name):
+            return logging.makeLogRecord({
+                'name': 'Base.category', 'levelno': level,
+                'levelname': level_name, 'msg': 'Hi!'})
+        f = LoggingReportFormatter(use_color=True)
+        self.assertEquals(f.format(record(logging.DEBUG, 'DEBUG')),
+                          '\x1b[1;37mcategory: Hi!\x1b[1;0m')
+        self.assertEquals(f.format(record(logging.INFO, 'INFO')),
+                          '\x1b[1;32mcategory: Hi!\x1b[1;0m')
+        self.assertEquals(f.format(record(logging.WARNING, 'WARNING')),
+                          '\x1b[1;33mcategory: Hi!\x1b[1;0m')
+        self.assertEquals(f.format(record(logging.ERROR, 'ERROR')),
+                          '\x1b[1;31mcategory: Hi!\x1b[1;0m')
+        self.assertEquals(f.format(record(logging.CRITICAL, 'CRITICAL')),
+                          '\x1b[1;35mcategory: Hi!\x1b[1;0m')
+
+
+class TestBenchmarkDoctor(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super(TestBenchmarkDoctor, cls).setUpClass()
+        doctor_log = logging.getLogger('BenchmarkDoctor')
+        cls._doctor_log_handler = MockLoggingHandler(level='DEBUG')
+        doctor_log.addHandler(cls._doctor_log_handler)
+
+    def setUp(self):
+        super(TestBenchmarkDoctor, self).setUp()
+        self._doctor_log_handler.reset()
+        self.logs = self._doctor_log_handler.messages
+
+    def assert_contains(self, texts, output):
+        assert not isinstance(texts, str)
+        for text in texts:
+            self.assertIn(text, output)
+
+    def test_uses_logging(self):
+        driver = BenchmarkDriverMock(tests=['B1', 'B2'])
+        with captured_output() as (out, _):
+            BenchmarkDoctor([], driver)
+        self.assert_contains(['Checking tests: B1, B2'], self.logs['debug'])
+        self.assertEquals(out.getvalue(), '')
+
+    def test_uses_report_formatter(self):
+        doctor = BenchmarkDoctor([], BenchmarkDriverMock(tests=['B1']))
+        console_handler = logging.getLogger('BenchmarkDoctor').handlers[1]
+        self.assertTrue(doctor)
+        self.assertTrue(isinstance(console_handler, logging.StreamHandler))
+        self.assertTrue(isinstance(console_handler.formatter,
+                                   LoggingReportFormatter))
+
+    def test_benchmark_name_matches_capital_words_conventions(self):
+        driver = BenchmarkDriverMock(tests=[
+            'BenchmarkName', 'CapitalWordsConvention', 'ABBRName',
+            'wrongCase', 'Wrong_convention'])
+        with captured_output() as (out, _):
+            doctor = BenchmarkDoctor([], driver)  #, use_color=False)
+            doctor.check()
+        output = out.getvalue()
+        self.assertNotIn('BenchmarkName', output)
+        self.assertNotIn('CapitalWordsConvention', output)
+        self.assertNotIn('ABBRName', output)
+        self.assert_contains(
+            ["'wrongCase' name doesn't conform to CapWords convention.",
+             "'Wrong_convention' name doesn't conform to CapWords convention."
+             ], output)
+        # print(output)
+
+    def test_benchmark_name_is_at_most_40_chars_long(self):
+        driver = BenchmarkDriverMock(tests=[
+            'BenchmarkName',
+            'ThisTestNameIsTooLongAndCausesOverflowsInReports'])
+        with captured_output() as (out, _):
+            doctor = BenchmarkDoctor([], driver)
+            doctor.check()
+        output = out.getvalue()
+        self.assertNotIn('BenchmarkName', output)
+        self.assert_contains(
+            ["'ThisTestNameIsTooLongAndCausesOverflowsInReports' name is "
+             "longer than 40 characters."], output)
+
+    def test_calibrate_runtime_samples(self):
+        def run(test, num_samples=None, num_iters=None, verbose=None,
+                measure_memory=False, platform=None):
+            return (test, num_samples, num_iters, verbose, measure_memory,
+                    platform)
+        r1 = PerformanceTestResult('0,B1,3,300,500,400,100,400'.split(','))
+        driver = BenchmarkDriverMock(
+            tests=['B1'],
+            responses=[(run('B1', num_samples=3, num_iters=2), r1)])
+        doctor = BenchmarkDoctor([], driver)
+        with captured_output() as (out, _):
+            doctor.check()
+        driver.assert_called_all_expected()
+        self.assertEquals(driver.results['B1 calibration'], r1)
+
+        # def result(name, num_samples, min_runtime):
+        #     log = '0,{0},{1},{2},{3},{4},100,{4}'.format(
+        #         name, num_samples, min_runtime,
+        #         min_runtime + 200, min_runtime + 100)
+        #     return PerformanceTestResult(log.split(','))
 
 
 if __name__ == '__main__':

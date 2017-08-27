@@ -17,6 +17,7 @@ import argparse
 import datetime
 import glob
 import json
+import logging
 import os
 import re
 import subprocess
@@ -39,12 +40,12 @@ class BenchmarkDriver(object):
         self._subprocess = _subprocess or subprocess
         self.all_tests = []
         self.tests = tests or self._get_tests()
-        self._validateLogParserImport()
+        self._ensureLogParserImport()
         self.parser = parser or LogParser()
         self.results = {}
 
-    def _validateLogParserImport(self):
-        """Validate LogParser was imported from compare_perf_tests.
+    def _ensureLogParserImport(self):
+        """Ensure that LogParser was imported from compare_perf_tests.
         If not, try to recover by dynamically importing it using `swift-repo`
         argument.
         """
@@ -64,8 +65,9 @@ class BenchmarkDriver(object):
 
     @property
     def test_harness(self):
-        return os.path.join(self.args.tests,
-                            "Benchmark_" + self.args.optimization)
+        suffix = (self.args.optimization if hasattr(self.args, 'optimization')
+                  else 'O')
+        return os.path.join(self.args.tests, "Benchmark_" + suffix)
 
     @property
     def _cmd_list_benchmarks(self):
@@ -124,7 +126,7 @@ class BenchmarkDriver(object):
         return cmd
 
     # BSD and GNU versions of `time` have different output format.
-    # https://unix.stackexchange.com/a/222583
+    # See https://unix.stackexchange.com/a/222583
     max_rss_re = re.compile(
         r'\s*(\d+)?\s*[Mm]aximum resident set size(?:[^\d]*(\d+))?')
 
@@ -133,6 +135,82 @@ class BenchmarkDriver(object):
         return (int(m.group(1)) if m.group(1) else
                 int(m.group(2)) * 1024)  # GNU time reports in kbytes
 
+
+class LoggingReportFormatter(logging.Formatter):
+    import logging as l
+    colors = { l.DEBUG: '7', l.INFO: '2', l.WARNING: '3', l.ERROR: '1',
+              l.CRITICAL: '5' }
+
+    def __init__(self, use_color=False):
+        super(LoggingReportFormatter, self).__init__('%(message)s')
+        self.use_color = use_color
+
+    def format(self, record):
+        msg = super(LoggingReportFormatter, self).format(record)
+        category = record.name.split('.')[-1]
+        return '\033[1;3{0}m{1}: {2}\033[1;0m'.format(
+            self.colors[record.levelno], category, msg) if self.use_color else
+            '{0} {1}: {2}'.format(record.levelname, category, msg)
+
+
+class BenchmarkDoctor(object):
+    """BenchmarkDoctor checks that the performance test behaves inside the
+    expected bounds when the runtime parameters like number of samples and
+    iterations change. It reports the conformance of benchmark to the set
+    of expected conventions."""
+    log = logging.getLogger('BenchmarkDoctor')
+    log_naming = log.getChild('naming')
+    log_runtime = log.getChild('runtime')
+    log_memory = log.getChild('memory')
+    log.setLevel(logging.DEBUG)
+
+    def __init__(self, args, driver=None, use_color=True):
+        super(BenchmarkDoctor, self).__init__()
+        self.driver = driver or BenchmarkDriver(args)
+        self.results = {}
+        self.console_handler = logging.StreamHandler(sys.stdout)
+        self.console_handler.setLevel(logging.INFO)
+        self.console_handler.setFormatter(LoggingReportFormatter(use_color))
+        self.log.addHandler(self.console_handler)
+        self.log.debug('Checking tests: %s', ', '.join(self.driver.tests))
+
+    def __del__(self):
+        self.log.removeHandler(self.console_handler)
+
+    capital_words_re = re.compile('[A-Z][a-zA-Z0-9]+')
+
+    @staticmethod
+    def _name_matches_capital_words_convention(test):
+        match = BenchmarkDoctor.capital_words_re.match(test)
+        matched = match.group(0) if match else ''
+        if test != matched:
+            BenchmarkDoctor.log_naming.warning(
+                "'%s' name doesn't conform to CapWords convention.", test)
+
+    @staticmethod
+    def _name_is_at_most_40_chars_long(test):
+        if len(test) > 40:
+            BenchmarkDoctor.log_naming.warning(
+                "'%s' name is longer than 40 characters.", test)
+
+    def _calibrate_runtime_samples(self, test):
+        r = self.driver.run(test, num_samples=3, num_iters=2)
+        self.driver.results[test + ' calibration'] = r
+
+    def check(self):
+        checks = [self._name_matches_capital_words_convention,
+                  self._name_is_at_most_40_chars_long,
+                  self._calibrate_runtime_samples]
+
+        for test in self.driver.tests:
+            for check in checks:
+                check(test)
+
+    @staticmethod
+    def run_check(args):
+        doctor = BenchmarkDoctor(args)
+        doctor.check()
+        return 0
 
 
 def parse_results(res, optset):
@@ -536,6 +614,16 @@ def parse_args(args):
         required=('compare_perf_tests' not in sys.modules))
     run_parser.set_defaults(func=run)
 
+    check_parser = subparsers.add_parser(
+        'check',
+        help='',
+        parents=[shared_benchmarks_parser])
+    check_parser.add_argument(
+        '--swift-repo',
+        help='absolute path to Swift source repo',
+        required=('compare_perf_tests' not in sys.modules))
+    check_parser.set_defaults(func=BenchmarkDoctor.run_check)
+
     compare_parser = subparsers.add_parser(
         'compare',
         help='Compare benchmark results')
@@ -560,7 +648,7 @@ def parse_args(args):
 def main():
     args = parse_args(sys.argv[1:])
 
-    if args.func != compare and isinstance(args.optimization, list):
+    if args.func == submit and isinstance(args.optimization, list):
         args.optimization = sorted(list(set(args.optimization)))
     return args.func(args)
 
