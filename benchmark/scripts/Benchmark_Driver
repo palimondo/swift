@@ -125,6 +125,13 @@ class BenchmarkDriver(object):
                     sys.exit('Unsupported platform')] + cmd)
         return cmd
 
+    def _cmd_calibrate_num_iters(self):
+        # compress command line length by using test numbers instead of names
+        ordinal_map = dict(zip(
+            self.all_tests, map(str, range(1, len(self.all_tests) + 1))))
+        return ([self.test_harness, '--num-samples=3', '--num_iters=2'] +
+                [ordinal_map[test] for test in self.tests])
+
     # BSD and GNU versions of `time` have different output format.
     # See https://unix.stackexchange.com/a/222583
     max_rss_re = re.compile(
@@ -148,9 +155,9 @@ class LoggingReportFormatter(logging.Formatter):
     def format(self, record):
         msg = super(LoggingReportFormatter, self).format(record)
         category = record.name.split('.')[-1]
-        return '\033[1;3{0}m{1}: {2}\033[1;0m'.format(
+        return ('\033[1;3{0}m{1}: {2}\033[1;0m'.format(
             self.colors[record.levelno], category, msg) if self.use_color else
-            '{0} {1}: {2}'.format(record.levelname, category, msg)
+                '{0} {1}: {2}'.format(record.levelname, category, msg))
 
 
 class BenchmarkDoctor(object):

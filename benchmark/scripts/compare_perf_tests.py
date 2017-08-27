@@ -46,9 +46,9 @@ class PerformanceTestSamples(object):
     def __str__(self):
         return (
             '🏋⏱ {0.name!s} {0.count!r}📏  '
-            '∧={0.min!r} ∨={0.max!r} ⩥={0.range!r} ⧱={0.spread:.2%} '
-            'σ={0.sd:.0f} ⧮={0.cv:.2%} ¯={0.mean:.0f} ~={0.median!r} '
-            'Q1={0.q1!r} Q3={0.q3!r} IQR={0.iqr!r}'
+            'Min={0.min!r} Q1={0.q1!r} M={0.median!r} Q3={0.q3!r} Max={0.max!r} '
+            'R={0.range!r} ⧱={0.spread:.2%} IQR={0.iqr!r} '
+            'x̅={0.mean:.0f} s={0.sd:.0f} ⧮={0.cv:.2%}'
             .format(self) if self.samples else
             '🏋⏱ {0.name!s} {0.samples!r}📏 '.format(self))
 

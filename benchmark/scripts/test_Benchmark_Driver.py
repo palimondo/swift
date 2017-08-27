@@ -260,20 +260,20 @@ class TestBenchmarkDriverRunningTests(unittest.TestCase):
         self.driver.args.measure_memory = True
         self.subprocess_mock.expect(
             'time -lp /benchmarks/Benchmark_O b1'.split(),
-            '  12345678  maximum resident set size' + ''.join(['\n'] * 14))
+            '  12345344  maximum resident set size' + ''.join(['\n'] * 14))
         r = self.driver.run('b1', measure_memory=True, platform='darwin')
         self.subprocess_mock.assert_called_all_expected()
-        self.assertEquals(r.max_rss, 12345678)
+        self.assertEquals(r.max_rss, 12345344)
 
     def test_measure_memory_used_by_test_on_linux(self):
         self.driver.args.measure_memory = True
         self.subprocess_mock.expect(
             'time --verbose /benchmarks/Benchmark_O b1'.split(),
-            '    Maximum resident set size (kbytes): 12345' +
+            '    Maximum resident set size (kbytes): 12056' +
             ''.join(['\n'] * 14))
         r = self.driver.run('b1', measure_memory=True, platform='linux2')
         self.subprocess_mock.assert_called_all_expected()
-        self.assertEquals(r.max_rss, 12641280)
+        self.assertEquals(r.max_rss, 12345344)
 
 
 class BenchmarkDriverMock(Mock):

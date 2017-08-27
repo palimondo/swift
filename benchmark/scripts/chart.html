@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Sample distribution</title>
+    <meta charset="UTF-8"/>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+      body {font-family: -apple-system;}
+      table {font-variant-numeric: tabular-nums;}
+      .hovertext text {
+        font-family: -apple-system !important; font-size: .6rem !important; }
+      .ct-major-tenth {display: block; position: relative; width: 100%}
+      .ct-major-tenth:before {display: block; float: left; content: "";
+          width: 0; height: 0; padding-bottom: 40%}
+      .ct-major-tenth:after {display: table}
+      .ct-major-tenth > svg {display: block;position: absolute; top: 0; left: 0}
+
+      .ct-square {display: block; position: relative; width: 100%}
+      .ct-square:before {display: block; float: left; content: "";
+          width: 0; height: 0; padding-bottom: 100%}
+      .ct-square:after {display: table}
+      .ct-square > svg {display: block; position: absolute; top: 0; left: 0}
+      .ct-major-tenth:after, .ct-square:after {content: "";clear: both}
+      .ct-label {font-size: .6rem; fill: rgba(0, 0, 0, .4); color: rgba(0, 0, 0, .4);}
+      .ct-series {opacity: 0.5}
+      .all-series {fill: Highlight; stroke: Highlight; opacity: 1}
+      .focus .ct-line, .focus .ct-point {opacity:0.15}
+      .focus .selected .ct-line, .focus .selected .ct-point {opacity:1}
+      .selected {background-color: Highlight; color: HighlightText}
+      .selected .sparkline {outline: auto; background-color: #fff}
+      tr:hover {background-color: Highlight; }
+      td {cursor: pointer;}
+      .ct-point {stroke-width: 5px; stroke-linecap: round}
+      h1 {font-size: 1.5rem}
+      h2 {font-size: 1.1rem}
+
+      .series h2 {float:left; margin-right: .5rem;}
+      .series form {clear: none; color: black; font-size: 0.75rem; margin-top: 1.1rem;}
+
+      table, table.raw, table.clean {caption-side: top !important;}
+      caption {text-align: left}
+
+      #stats {text-align: right;}
+      .sparkline {background-color: #fafafa66; width: 1rem; height: 1rem;}
+      .sparkline .ct-point {stroke-width: 1px;}
+      /*.raw .clean, .clean .raw {opacity: .5}*/
+      .raw .clean, .clean .raw {display: none}
+      #sparkline {border: 1px solid red; display: none;}
+      table { border-collapse:collapse; border-spacing:0;}
+      td {padding: 0 .2rem}
+
+      body > div, aside {display: flex}
+
+      #boxplot, #stacked-histogram {width: 10rem; flex: 0 0 6%}
+
+@media only screen and (min-width: 1021px) {
+  #chart {flex: 1 1 70%}
+  asside {flex: 1 1 30%}
+  asside { display: flex; flex-flow: row wrap; order: 2;
+    justify-content: space-between;}
+  .overview h2 {margin-top: -2.2rem}
+  .overview {flex: 1 1 100%}
+  .histogram, .runtimes, .lagplot {flex: 1 1 50%}
+}
+
+
+@media only screen and (max-width: 1020px) {
+  body > div {flex-flow: column nowrap}
+  asside { display: flex; flex-flow: row wrap; justify-content: flex-end; }
+  .series {display: block;}
+  h2 {font-size: 80%; margin: 0 0 -.85rem 3.1rem;}
+  .series h2, .series form { margin: 0 0 0 0;}
+  .overview {display: none;}
+  .histogram, .runtimes {min-width: 13rem; min-height: 13rem;}
+ /*  .sparkline {width: 1.5rem} */
+}
+
+    </style>
+  </head>
+  <body>
+    <h1 id="title">Benchmark</h1>
+    <div>
+      <asside>
+        <!-- <div class='overview'>
+          <h2>Overview</h2>
+          <div class="ct-chart ct-major-tenth" id="overview"></div>
+        </div> -->
+        <div class='series'>
+          <h2>Series</h2>
+          <form class="ct-label">
+            <input type="radio" name="series" id="raw" onchange="selectSeries(this)" checked>
+            <label for="raw">Raw</label>
+            <input type="radio" name="series" id="clean" onchange="selectSeries(this)">
+            <label for="clean">Exclude Outliers</label>
+          </form>
+          <table id="series" class="ct-label raw">
+            <thead>
+              <tr id="titles">
+                <th title="Series"></th>
+                <th title="Legend"></th>
+                <th title="Number of Samples">n</th>
+                <th title="Minimum">Min</th>
+                <th title="1st Quartile">Q1</th>
+                <th title="Median">Med</th>
+                <th title="3rd Quartile">Q3</th>
+                <th title="Maximum">Max</th>
+                <th title="Runtimes"></th>
+                <th title="Mean">x̅</th>
+                <th title="Strandard Deviation">s</th>
+                <th title="Coeficient of Variation">CV</th>
+                <th title="Range">R</th>
+                <th title="Spread">S</th>
+                <th title="Interquartile Range">IQR</th>
+                <th title="Top Inner Fence (Q3 + 1.5*IQR)">TIF</th>
+              </tr>
+            </thead>
+            <tbody id="stats">
+            </tbody>
+          </table>
+          <div class="ct-chart ct-square sparkline" id="sparkline"></div>
+        </div>
+        <div class="histogram">
+          <h2>Histogram</h2>
+          <div class="ct-chart ct-square" id="histogram"></div>
+        </div>
+        <div class="runtimes">
+          <h2>Runtimes</h2>
+          <div class="ct-chart ct-square" id="runtimes"></div>
+        </div>
+        <div class="lagplot">
+          <h2>Lag plot (1)</h2>
+          <div class="ct-chart ct-square" id="lag1"></div>
+        </div>
+        <div class="lagplot">
+          <h2>Lag plot (2)</h2>
+          <div class="ct-chart ct-square" id="lag2"></div>
+        </div>
+    </asside>
+    <div id="boxplot"></div>
+    <div class="ct-chart ct-major-tenth" id="chart"></div>
+    <div id="stacked-histogram"></div>
+  </div>
+<script>
+
+function bisect_right(a, x, lo=0, hi=a.length) {
+	while (lo < hi) {
+		mid = (lo + hi) >> 1
+		if (x < a[mid]) { hi = mid }
+    else { lo = mid + 1 }
+	}
+  return lo
+}
+const bisect = bisect_right
+
+function stretchedIndexes(length, size) {
+  m = Math.floor(size / length) // multiple
+  base = m - 1
+  indexes = Array(length)
+  for (i of indexes.keys()) {
+    indexes[i] = i * m + base }
+  return indexes
+}
+
+function setClass(e, c) {
+  let currentClasses = e.getAttribute('class')
+  if (currentClasses && currentClasses.includes(c)) { return }
+  e.setAttribute('class', currentClasses + ' ' + c)
+}
+function removeClass(e, c) {
+  e.setAttribute('class', e.getAttribute('class').replace(RegExp('\s?'+c), ''))
+}
+
+const select = (e) => setClass(e, 'selected')
+const deselect = (e) => removeClass(e, 'selected')
+
+const classes = e => e.getAttribute('class')
+const isSeries = c => c.startsWith('ct-series-')
+const hasSeries = cs => cs.includes('ct-series-')
+const getSeries = cs => cs.split(' ').find(isSeries)
+
+const findSeries = (e) => {
+  if (e === document) {return null}
+  else {
+    let cs = classes(e)
+    return (cs && hasSeries(cs)) ? getSeries(cs) : findSeries(e.parentNode)
+  }
+}
+const seriesIndex = sc => series.findIndex(s => s.seriesClass == sc)
+const firstNonNull = a => a.findIndex(x => x != null)
+function lastNonNull(a) {
+  for (var i = a.length - 1; i >= 0; i--) {
+    if (a[i] != null) { return i } }
+  return -1
+}
+
+const fillColorForSeries = s =>
+  `rgba${colorForSeries(s).slice(3, -1)}, 0.3)`
+
+function traceMeanArea(s) {
+  let t = traceScatterPlot(s)
+  t.fill = 'toself'; t.mode = 'lines'; t.line.width = 0
+  t.fillcolor = fillColorForSeries(s)
+  let m = seriesIsRaw() ? s.rawStats.mean : s.cleanStats.mean
+  var i = firstNonNull(t.y)
+  t.x.splice(i, 0, t.x[i]); t.y.splice(i, 0, m)
+  i = lastNonNull(t.y)
+  t.x.splice(i + 1, 0, t.x[i]); t.y.splice(i + 1, 0, m)
+  return t
+}
+
+function selectSeries(s){
+  if (s && s.id) {
+    document.getElementById('series').className = `ct-label ${s.id}`
+    updateCharts()
+  } else {
+    selected = Array.from(document.getElementsByClassName('selected'))
+    selected.forEach(deselect)
+    oldSeries = selected.reduce((_, e) => getSeries(classes(e)), '')
+    let chart = document.getElementById('chart')
+    if (selected.length > 0){
+      Plotly.deleteTraces(chart, 0)} // remove mean area
+      // Plotly.deleteTraces(chart, [0, 1])} // remove mean area and runtimes
+    // console.log(`select '${s}' and deselect '${oldSeries}'`)
+    if (s && !(s == oldSeries)) {
+      setClass(chart, 'focus')
+      Array.from(document.getElementsByClassName(s)).forEach(select)
+      Plotly.restyle(chart, 'opacity', 0.1,
+        (oldSeries.length > 0) ? [seriesIndex(oldSeries)] : undefined)
+      Plotly.restyle(chart, 'opacity', 0.6, [seriesIndex(s)])
+      Plotly.addTraces(chart, traceMeanArea(series[seriesIndex(s)]), 0)
+      // Plotly.addTraces(chart, traceRuntime(series[seriesIndex(s)]), 0)
+    } else {
+      Plotly.restyle(chart, 'opacity', 0.5)
+      removeClass(chart, 'focus')
+    }
+  }
+  // Plotly.newPlot('sparkline',
+  //   [traceRuntime(selectedSeries())], sparklineLayoutFor(selectedSeries()), staticPlot)
+
+  Plotly.newPlot('stacked-histogram',
+    [traceVerticalHistogram(selectedSeries())], layoutSansAxis(), noModeBar)
+  plotHistogram()
+  plotRuntimes()
+  plotLags()
+}
+document.onclick = ev => selectSeries(findSeries(ev.target))
+document.ontap = ev => selectSeries(findSeries(ev.target))
+
+function cleanRuntimes(s){
+  if (s === allSeries) {
+    return series.reduce(
+      (a, s) => cleanRuntimes(s).concat(a), []).sort(ascending)
+  } else {
+    return s.runtimes.slice(0, bisect(s.runtimes, s.cutoff))
+  }
+}
+
+function populateStatsTable() {
+  statsTable = document.getElementById('stats')
+
+  titles = []
+  var th = document.getElementById('titles').firstElementChild
+  while (th) {
+    titles.push(th.getAttribute('title'));
+    th = th.nextElementSibling
+  }
+
+  // const legendSVG = "<svg width='26' height='6' class='ct-chart-line'>" +
+  //   "<g class='ct-series'><path class='ct-line' d='M3 3h20' />" +
+  //   "<path class='ct-point' d='M3,3h.001M13,3h.001M23,3h.001'/></g></svg>"
+  const legendSVG = "<svg width='10' height='6' class='ct-chart-line'>" +
+    "<g class='ct-series'><path class='ct-line' d='M0,3h10' />" +
+    "<path class='ct-point' d='M5,3h.001'/></g></svg>"
+
+  td = ([title, value]) => {
+    let td = document.createElement('td')
+    td.setAttribute('title', title)
+    if (typeof value === 'number' || typeof value === 'string') {
+      td.innerHTML = value
+    } else {
+      td.appendChild(value)
+    }
+    return td
+  }
+  tr = (seriesClass, typeClass, children) => {
+    let tr = document.createElement('tr')
+    tr.setAttribute('class', `${seriesClass} ${typeClass}`)
+    children.forEach(td => tr.appendChild(td))
+    return tr
+  }
+  stats1 = s => [s.n, s.min, s.q1, s.median, s.q3, s.max]
+  stats2 = s => [s.mean, s.sd, s.cv, s.range, s.spread, s.iqr, s.tif]
+
+  values = (s, raw) => {
+    sts = raw ? s.rawStats : s.cleanStats
+    let line = sparkline.cloneNode(false)
+    line.removeAttribute('id')
+    let ss = raw ? s : {
+      runtimes: cleanRuntimes(s), name: s.name, seriesClass: s.seriesClass }
+    wait(1).then(_ => // wait until the line div is inserted into the table,
+      Plotly.newPlot( // can't plot to element not attached to the document
+        // line, [traceRuntime(ss, 0.7)], sparklineLayoutFor(ss), staticPlot))
+        line, [traceRuntime(ss, 0.7)], sparklineLayoutFor(ss), staticPlot))
+    return [nameOf(s), legendSVG, ...stats1(sts), line, ...stats2(sts)]
+  }
+
+  rows = []
+  series.forEach(s => {
+    rows.push(tr(s['seriesClass'], 'clean',
+      zip([titles, values(s, false)]).map(td)))
+    rows.push(tr(s['seriesClass'], 'raw',
+      zip([titles, values(s, true)]).map(td)))
+  })
+  rows.reverse().forEach(tr => statsTable.appendChild(tr))
+}
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+const seriesIsRaw = _ =>
+  document.getElementById('series').className.endsWith('raw')
+const log2N = s => Math.max(1, Math.ceil(Math.log2(s.data.length)))
+const rbgaForSeries = s =>
+  `rgba${colorForSeries(s).slice(3, -1)}, ${opacity(log2N(s))})`
+const labelColor = 'rgba(0, 0, 0, 0.4)'
+
+function traceRuntime(s, opacity=0.5) {
+  let runtimes = seriesIsRaw() ? s.runtimes : cleanRuntimes(s)
+  return {
+    // x: stretchedIndexes(runtimes.length, maxLength),
+    y: runtimes.slice(),
+    name: nameOf(s), mode: 'markers',
+    type: 'scatter',
+    // FIXME try saving to image (PNG) from scattergl for sparklines
+    // type: 'scattergl',
+    // XXX measure if doing just the mean area fill is faster (without markers)
+    // There should be some kind of optimization that eliminates redundant points
+    // that do not change the shape?!
+    connectgaps: true, opacity: opacity,
+    cliponaxis: false,
+    marker: { color: colorForSeries(s), size: 1},
+  }}
+function traceScatterPlot(s) {
+  let isRaw = seriesIsRaw()
+  let filtered = s => s.data.map(
+    runtime => ((isRaw || runtime <= s.cutoff) ? runtime : null ))
+  return {
+    x: stretchedIndexes(s.data.length, maxLength), y: filtered(s),
+    name: nameOf(s),
+    type: 'scatter',
+    // type: 'scattergl',
+    // type: maxLength * series.length / 8 > 4096 ? 'scattergl' : 'scatter',
+    mode: 'lines+markers',
+    connectgaps: true, opacity: 0.5, cliponaxis: false,
+    marker: { color: colorForSeries(s), size: 5,},
+    line : { color: rbgaForSeries(s), width: strokeWidth(log2N(s))}
+  }}
+
+const systemFont = {family: '-apple-system', size: 10}
+const labelFont = {family: '-apple-system', size: 10, color: labelColor}
+const defaultAxis = _ => { return {
+  tickfont: labelFont, zeroline: false, hoverformat: '.0f',
+  // tickformat: 'd3.format(",d")'
+}}
+
+function axisFormat() {
+  return {
+    yaxis: { tickfont: labelFont, zeroline: false, hoverformat: '.0f',},
+    xaxis: {
+      tickfont: labelFont, zeroline: false, hoverformat: '.0f',
+      tickformat: 'd3.format(",d")'},
+    showlegend: false, hoverlabel: {font: systemFont},
+    margin: { l: 35, r: 3, b: 25, t: 5, pad: 2},
+  }}
+
+function layoutAxis() {
+  let f = axisFormat()
+  f.yaxis.zeroline = true
+  p = allSeries.cleanStats.range * 0.01
+  f.yaxis.range = [allSeries.cleanStats.min - p, allSeries.cleanStats.max + p],
+  f.xaxis.range = [0 - padX[maxLength], maxLength - 1 + padX[maxLength]]
+  f.margin.l = 2 + (''+allSeries.cleanStats.max).length * 7 // label length
+  return f
+}
+
+const yRange = (name, range) => { return {
+  name: name, layout: { yaxis: { range: range } } } }
+const paddedRange = (stats, padding=1) =>
+  [stats.min - padding, stats.max + padding]
+const cleanRange = _ => paddedRange(allSeries.cleanStats)
+const fullRange = _ => paddedRange(allSeries.rawStats)
+const addFrames = _ => Plotly.addFrames('chart',
+    [yRange('overview', fullRange()), yRange('focusClean', cleanRange())])
+const animateAxisZoomBounce = _ =>
+  Plotly.animate('chart', ['overview', 'focusClean'], {
+     frame: [
+       {duration: 1000, redraw: false},
+       {duration: 1500, redraw: true},],
+     transition: [
+       {duration: 500, easing: 'cubic-in-out'},
+       {duration: 1500, easing: 'cubic-out'},]
+   })
+
+function createCharts() {
+  Plotly.newPlot('boxplot',
+    series.map(traceBoxPlot).reverse(), layoutSansAxis(), noModeBar)
+  Plotly.newPlot('stacked-histogram',
+    [traceVerticalHistogram(selectedSeries())], layoutSansAxis(), noModeBar)
+  plotHistogram()
+  plotRuntimes()
+  plotLags()
+  Plotly.newPlot('chart', series.map(traceScatterPlot), layoutAxis())
+  // Plotly.newPlot('chart', series.map(traceScatterPlot), layoutAxis()).then(
+  //   addFrames().then(animateAxisZoomBounce()))
+  chart.on('plotly_afterplot', synchromizeZoom)
+}
+
+function updateCharts() {
+  // this purges are required when the stats table changes width,
+  // otherwise the chart would not shrink when table expands (Clean -> Raw)
+  // causing the page to scroll horizontally
+  Plotly.purge(document.getElementById('histogram'))
+  Plotly.purge(document.getElementById('runtimes'))
+  Plotly.purge(document.getElementById('chart'))
+  Plotly.purge(document.getElementById('lag1'))
+  Plotly.purge(document.getElementById('lag2'))
+  Plotly.newPlot('chart', series.map(traceScatterPlot), layoutAxis())
+  chart.on('plotly_afterplot', synchromizeZoom)
+}
+
+function synchromizeZoom() {
+  var bl = document.getElementById('boxplot').layout
+  var shl = document.getElementById('stacked-histogram').layout
+  bl.yaxis.range = chart.layout.yaxis.range
+  shl.yaxis.range = chart.layout.yaxis.range
+  Plotly.relayout('boxplot', bl)
+  Plotly.relayout('stacked-histogram', shl)
+}
+
+function selectedSeries() {
+  seriesClass = Array.from(document.getElementsByClassName('selected')).reduce(
+    (_, e) => getSeries(classes(e)), undefined)
+  selected =
+    seriesClass ? series.find(s => s.seriesClass == seriesClass) : allSeries
+  return {
+    name: selected.name ? selected.name : ' All Series',
+    seriesClass: selected.seriesClass,
+    runtimes: seriesIsRaw() ? selected.runtimes : cleanRuntimes(selected),
+    cutoff: selected.cutoff,
+  }
+}
+
+function runningMeanVariance([k, M_, S_], x) {
+  k = k + 1
+  M = M_ + (x - M_) / k
+  S = S_ + (x - M_) * (x - M)
+  return [k, M, S]
+}
+
+function round(x, precision = 0) {
+  let factor = Math.pow(10, precision);
+  return Math.round(x * factor) / factor;
+}
+
+function quartileIndexes(n) {
+  Q2 = Math.floor(n / 2); Q1 = Math.floor(n / 4); Q3 = Q2 + Q1
+  return [Q1, Q2, Q3]
+}
+
+function computeStats(a) { // assumes `a` is sorted ascending
+  let [n, M, S] = a.reduce(runningMeanVariance, [0, 0, 0])
+  let [Q1, Q2, Q3] = quartileIndexes(n)
+  let [min, q1, median, q3, max] = [a[0], a[Q1], a[Q2], a[Q3], a[n - 1]]
+  let [mean, sd] = [Math.round(M), Math.round(Math.sqrt(S/(n-1)))]
+  let cv = (M) ? round((sd / M * 100)) + '%' : '-'
+  let [range, iqr] = [max - min, q3 - q1]
+  let spread = (M) ? round(((max - min) / M * 100)) + '%' : '-'
+  return {
+    min, q1, median, q3, max, n, mean, sd, cv, range, spread,
+    iqr,  tif: round(q3 + 1.5 * iqr), tof: q3 + 3 * iqr,
+  }
+}
+
+const sparklineLayoutFor = s => {
+  let l = {
+    yaxis: {showticklabels: false, showgrid: false, zeroline: false,},
+    xaxis: {showticklabels: false, showgrid: false, zeroline: false,},
+    showlegend: false,
+    margin: { l: 0, r: 0, b: 0, t: 0, pad: 0},
+  }
+  l.xaxis.range = [0, s.runtimes.length-1]
+  l.yaxis.range = [s.runtimes[0], s.runtimes[s.runtimes.length - 1]]
+  return l
+}
+
+const staticPlot =  {staticPlot: true, displayModeBar: false,}
+
+const strokeWidth2 = n => 0.0245398 * (n*n) - 0.772207 * n + 6.64742
+const strokeWidth = n => (n > 14) ? 0.7 : round(strokeWidth2(n)*.5, 2)
+const opacity3 = n =>
+  0.0016453 * (n*n*n) - 0.0297611 * (n*n) + 0.0790482 * n + 0.841333
+const opacity = n => (n > 10) ? 0.3 : round(opacity3(n), 2)
+
+function seriesLineRule(seriesClass, length) {
+	n = Math.max(1, Math.ceil(Math.log2(length)))
+	return `.${seriesClass} .ct-line {` +
+		`stroke-width: ${strokeWidth(n)}px; ` +
+		`opacity: ${opacity(n)} }`
+}
+
+const seriesColorRule = (seriesClass, color) =>
+  `.${seriesClass} .ct-line, .${seriesClass} .ct-point {stroke: ${color}}`
+
+const colors = [
+  'rgb(215, 2, 6)', 'rgb(240, 91, 79)', 'rgb(244, 198, 62)',
+  'rgb(209, 121, 5)', 'rgb(69, 61, 63)', 'rgb(89, 146, 43)',
+  'rgb(5, 68, 211)', 'rgb(107, 3, 146)', 'rgb(240, 91, 79)',
+  'rgb(221, 164, 88)', 'rgb(234, 207, 125)', 'rgb(134, 121, 125)',
+  'rgb(178, 195, 38)', 'rgb(97, 136, 226)']
+
+function createSeriesColorStyle(){
+  sheet = document.styleSheets[1]
+  zip([series, colors]).forEach(([s, color]) => sheet.insertRule(
+    seriesColorRule(s.seriesClass, color), 0))
+}
+
+function adjustSeriesLineStyle() {
+	sheet = document.styleSheets[1]
+	series.forEach(s => sheet.insertRule(
+	  seriesLineRule(s.seriesClass, s.data.length), 0))
+}
+
+const sum = (a, c) => a + c
+const suma = ([a, c]) => a + c
+const outliers = s => s.data.filter(x => x > s.rawStats.tif)
+const propers = s => s.data.filter(x => x <= s.rawStats.tif)
+// outs = series.map(outliers)
+// pros = series.map(propers)
+// allSum = zip([outsSum, prosSum]).map(suma)
+// errorPercentage = zip([outsSum, allSum]).map(([o,a])=> o/a)
+
+const colorForSeries = s => (s.seriesClass == 'all-series') ?
+  'rgb(58, 153, 250)' : Array.from(document.styleSheets[1].cssRules).find(
+  rule => rule.selectorText.startsWith('.' + s.seriesClass)).style.stroke
+
+const nameOf = s => s.name.split(' ')[1]
+
+function traceBoxPlot(s) {
+  return {
+    name: nameOf(s),
+    type: 'box',
+    opacity: 0.5,
+    y: cleanRuntimes(s),
+    boxpoints: false,
+    // y: s.data,
+    // boxpoints: 'outliers',
+    marker: { color: colorForSeries(s) },
+    line : { width: 1.4}
+  }}
+function traceVerticalHistogram(s) {
+  return {
+    name: nameOf(s),
+    type: 'histogram',
+    hoverinfo:'x+y',
+    ybins: {
+      start: allSeries.cleanStats.min-1,
+      end: allSeries.cleanStats.max+1,
+      size: 1.0,
+    },
+    opacity: 0.6,
+    // y: cleanRuntimes(s),
+    y: s.runtimes,
+    marker: { color: colorForSeries(s) }
+  }}
+
+const padX = {
+  2: 0.005, 4: 0.01, 8: 0.025, 16: 0.05, 32: 0.1, 64: 0.25, 128: 0.5, 256: 1,
+  512: 2.5, 1024: 5, 2048: 7.5, 4096: 15, 8192: 20, 16384: 50, 32768: 100
+}
+
+const lag = (a, l) => a.slice(l).concat(a.slice(0, l))
+
+function traceLag(s, l) {
+  let isRaw = seriesIsRaw()
+  let filtered = s.data.filter(runtime => (isRaw || runtime <= s.cutoff))
+  return [{
+    x: filtered,
+    y: lag(filtered, l),
+    type: 'pointcloud',
+    hoverinfo: 'x+y',
+    opacity: 0.6,
+    marker: { color: colorForSeries(s) },
+  }]
+}
+
+function plotLags() {
+  seriesClass = Array.from(document.getElementsByClassName('selected')).reduce(
+    (_, e) => getSeries(classes(e)), undefined)
+  selected =
+    seriesClass ? series.find(s => s.seriesClass == seriesClass) : allSeries
+
+  Plotly.newPlot('lag1', traceLag(selected, 1), axisFormat(), noModeBar)
+  Plotly.newPlot('lag2', traceLag(selected, 2), axisFormat(), noModeBar)
+}
+
+function plotRuntimes(series=selectedSeries()) {
+  let {runtimes, seriesClass} = series
+  let s = computeStats(runtimes)
+  tifIndex = bisect(runtimes, series.cutoff)
+  tifPercentile = tifIndex / s.n
+  let raw = (series.cutoff < s.max)
+  fiveNumberSummary = [s.min, s.q1, s.median, s.q3, s.max]
+  rt = traceRuntime(series)
+  rt.marker.size = 5.0
+  rt.cliponaxis = false
+
+  // FIXME add this to sparklines, too?
+  // Mean area plot
+  let t = traceRuntime(series)
+  t.fill = 'toself'; t.mode = 'lines'; t.line = {width: 0}
+  t.fillcolor = fillColorForSeries(series)
+  t.x = [...Array(s.n).keys()]
+  var i = 0
+  t.x.splice(i, 0, t.x[i]); t.y.splice(i, 0, s.mean)
+  i = s.n
+  t.x.splice(i + 1, 0, t.x[i]); t.y.splice(i + 1, 0, s.mean)
+
+  let layout = axisFormat()
+  layout.yaxis.tickvals = raw ? [s.min, s.tif, s.max] : fiveNumberSummary
+  layout.yaxis.ticktext = raw ? [s.min, '', s.max] : undefined
+  // layout.yaxis.range = [s.min, s.max]
+  var p = (s.max - s.min) * 0.01
+  layout.yaxis.range = [s.min - p, s.max + p]
+  layout.xaxis.tickvals = raw ? [0, tifIndex - .5] : [0, ...quartileIndexes(s.n), (s.n - 1)]
+  // FIXME labels for n = 2, 3, 4 (when 5 no. summary doesn't fit)
+  // XXX show values in chart instead of on yaxis
+  layout.xaxis.ticktext = raw ? [0, tifIndex] : ['Min', 'Q1', 'Med', 'Q3', 'Max']
+
+  let p2 = Math.pow(2, Math.ceil(Math.log2(s.n)))
+  p = padX[p2] * 2.5
+  layout.xaxis.range = [0 - p, s.n - 1 + p]
+  layout.margin.r = 15
+  layout.margin.t = raw ? 10 : 5
+  layout.margin.l = 2 + (''+s.max).length * 7 // label length
+  layout.annotations = raw ? [ {
+      xref: 'x', yref: 'y', x: tifIndex -.5, y: s.max,
+      xanchor: 'right', yanchor: 'bottom',
+      // xref: 'paper', yref: 'paper', x: 'middle', y: 'top',
+      // xanchor: 'middle', yanchor: 'top',
+      text: `Top Inner Fence at ${Math.round(tifPercentile*100)}%`,
+      font: labelFont,
+      showarrow: false
+    },
+    {
+        xref: 'x', yref: 'y', x: s.n -1, y: (s.min + s.max)/2,
+        xanchor: 'left', yanchor: 'middle',
+        text: `${s.n-tifIndex} outlier${s.n-tifIndex > 1 ? 's' : ''}`,
+        textangle: -90,
+        font: labelFont,
+        showarrow: false
+      },
+    {
+        xref: 'x', yref: 'y', x: tifIndex -.5, y: s.tif,
+        xanchor: 'right', yanchor: 'bottom',
+        text: `TIF: ${s.tif}`,
+        font: labelFont,
+        showarrow: false
+      },
+    ] : []
+
+  Plotly.newPlot('runtimes',
+  [rt, t],
+  layout,
+  noModeBar)
+}
+
+function plotHistogram(s=selectedSeries()) {
+  let {runtimes, seriesClass} = s
+  // let {min, max, mean, sd, runtimes, seriesClass} = s
+  let {min, max, mean, sd} = computeStats(s.runtimes)
+
+  bs = (sd > 1) ? sd : 1 // bucket size
+  lo = mean - (Math.ceil((mean-min)/bs)*bs)
+  hi = mean + (Math.ceil((max-mean)/bs)*bs)
+  steps = Math.min(Math.ceil((hi - lo)/bs), 10)
+
+  start = (lo - mean) / bs // bs ~= sd; how many SDs from mean is start?
+  sdMultiples = x => start + x
+  symbols = m => (m == -1) ? '-s' : (m == 0) ? 'x̅' : (m == 1) ? 's' : m + 's'
+  const labels = i => symbols(sdMultiples(i))
+
+  splits = i => lo + (i * bs)
+  intervals = x=>[x - 1, x + bs - 1]
+  indexes = ([l, h]) => [bisect(runtimes, l), bisect(runtimes, h)]
+  frequencyCount = ([l, h]) => h-l
+  const computeHistogram = i => frequencyCount(indexes(intervals(splits(i))))
+  hist = [...Array(steps).keys()].map(computeHistogram)
+  hist.push(0)
+  yTicks = hist.slice().sort(descending).slice(0,2)
+  xTicks = [...Array(steps+1).keys()].map(splits)
+
+  let layout = axisFormat()
+  layout.yaxis.tickvals = yTicks
+  layout.xaxis.tickvals = xTicks
+  layout.xaxis.ticktext = [...Array(steps+1).keys()].map(labels)
+  layout.xaxis.range = [xTicks[0], xTicks[xTicks.length - 1]]
+  layout.yaxis.range = [0, yTicks[0] + (yTicks[0] * 0.01)], // align w runtimes
+  layout.margin.r = 7
+  layout.margin.l = 2 + (''+yTicks[0]).length * 7 // label length
+
+  Plotly.newPlot('histogram',
+  [{
+    name: nameOf(s), type: 'histogram', hoverinfo:'x+y',
+    x: s.runtimes,
+    xbins: { start: lo, end: hi, size: sd, },
+    opacity: 0.6, marker: { color: colorForSeries(s) }
+  }],
+  layout,
+  noModeBar)
+}
+
+function layoutSansAxis() {
+  p = allSeries.cleanStats.range * 0.01
+  let f = axisFormat()
+  f.yaxis.range = [allSeries.cleanStats.min - p, allSeries.cleanStats.max + p]
+  f.yaxis.zeroline = true
+  f.yaxis.showgrid = true
+  f.yaxis.showticklabels = false
+  f.xaxis.showgrid = false
+  f.xaxis.showticklabels = false
+  f.margin.l = 5
+  return f
+}
+const noModeBar = {displayModeBar: false,}
+
+var chart, overview, histogram, statsTable, runtimes, sparkline
+let sparklines = []
+var series = {}
+let maxLength
+var runtimes = []
+let allSeries
+
+const zip = rows=>rows[0].map((_,c)=>rows.map(row=>row[c]))
+const enumerate = a => zip([[...a.keys()], a])
+const toCoordinates = a => enumerate(a).map(([x, y]) => ({x, y}))
+const longest = series => series.reduce((m, s)=>Math.max(m, s.data.length), 0)
+const descendingByIterations = (a, b) => b.num_iters - a.num_iters
+const ascending = (a,b) => a - b
+const descending = (a,b) => b - a
+
+var logFile = (new URLSearchParams(location.search)).get('f')
+logFile = (logFile) ? logFile : 'f.json'
+fetch(logFile).then(function(response) {
+  return response.json();
+}).then(function(data) {
+  allSeries = data
+  document.getElementById('title').innerHTML = data.name;
+  document.title = data.name;
+
+  series = data.series.sort(descendingByIterations)
+  maxLength = longest(series)
+  // Prepare runtimes for histogram
+  allSeries.runtimes = []
+  allSeries.data = []
+  series.forEach(s => {
+    allSeries.runtimes = s.data.concat(allSeries.runtimes)
+    allSeries.data = s.data.concat(allSeries.data)
+    s.runtimes = s.data.slice().sort(ascending)
+    s.rawStats = computeStats(s.runtimes)
+    s.cutoff = s.rawStats.tif
+    s.cleanStats = computeStats(cleanRuntimes(s)) // must be after cutoff is set
+  })
+  allSeries.runtimes.sort(ascending)
+  allSeries.rawStats = computeStats(allSeries.runtimes)
+  allSeries.cleanStats = computeStats(cleanRuntimes(allSeries)) // is fine here
+  allSeries.cutoff = allSeries.cleanStats.max
+  allSeries['seriesClass'] = 'all-series'
+
+  seriesClassSuffixes = 'abcdefghijklmnoabcdefghijk'.split('').slice(0, series.length)
+  // seriesClassSuffixes = 'abcdefghijklmnopqrstuvwxyz'.split('').slice(0, series.length)
+  zip([series, seriesClassSuffixes]).forEach(
+    ([s, scs]) => s['seriesClass'] = 'ct-series-' + scs)
+
+  adjustSeriesLineStyle()
+  createSeriesColorStyle()
+  sparkline = document.getElementById('sparkline')
+  populateStatsTable()
+  createCharts()
+});
+/* TODO ?
+ - add micro histograms to table
+ - Excludes Outliers: iteratively (while TIF < MAX), do also Bottom Inner Fence
+ - Plotly vs. responsive design
+ - Speed-up charts with 16k+ samples? use type: 'scattergl', 'pointcloud'
+*/
+</script>
+  </body>
+</html>
