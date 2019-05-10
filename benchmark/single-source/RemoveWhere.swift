@@ -12,22 +12,42 @@
 
 import TestsUtils
 
+let t: [BenchmarkCategory] = [.validation, .api]
+
 public let RemoveWhere = [
   // tests repeated remove(at:) calls in generic code
-  BenchmarkInfo(name: "RemoveWhereQuadraticStrings", runFunction: run_RemoveWhereQuadraticStrings, tags: [.validation, .api], setUpFunction: buildWorkload),
-  BenchmarkInfo(name: "RemoveWhereQuadraticInts", runFunction: run_RemoveWhereQuadraticInts, tags: [.validation, .api], setUpFunction: buildWorkload),
+  BenchmarkInfo(name: "RemoveWhereQuadraticStrings",
+    runFunction: run_RemoveWhereQuadraticStrings, tags: t, setUpFunction: sss,
+    legacyFactor: 20),
+  BenchmarkInfo(name: "RemoveWhereQuadraticInts",
+    runFunction: run_RemoveWhereQuadraticInts, tags: t, setUpFunction: sis,
+    legacyFactor: 49),
   // tests performance of RangeReplaceableCollection.filter
-  BenchmarkInfo(name: "RemoveWhereFilterStrings", runFunction: run_RemoveWhereFilterStrings, tags: [.validation, .api], setUpFunction: buildWorkload),
-  BenchmarkInfo(name: "RemoveWhereFilterInts", runFunction: run_RemoveWhereFilterInts, tags: [.validation, .api], setUpFunction: buildWorkload),
+  BenchmarkInfo(name: "RemoveWhereFilterStrings",
+    runFunction: run_RemoveWhereFilterStrings, tags: t, setUpFunction: sss,
+    legacyFactor: 4),
+  BenchmarkInfo(name: "RemoveWhereFilterInts",
+    runFunction: run_RemoveWhereFilterInts, tags: t, setUpFunction: sis,
+    legacyFactor: 4),
   // these two variants test the impact of reference counting and
   // swapping/moving
-  BenchmarkInfo(name: "RemoveWhereMoveStrings", runFunction: run_RemoveWhereMoveStrings, tags: [.validation, .api], setUpFunction: buildWorkload),
-  BenchmarkInfo(name: "RemoveWhereMoveInts", runFunction: run_RemoveWhereMoveInts, tags: [.validation, .api], setUpFunction: buildWorkload),
-  BenchmarkInfo(name: "RemoveWhereSwapStrings", runFunction: run_RemoveWhereSwapStrings, tags: [.validation, .api], setUpFunction: buildWorkload),
-  BenchmarkInfo(name: "RemoveWhereSwapInts", runFunction: run_RemoveWhereSwapInts, tags: [.validation, .api], setUpFunction: buildWorkload),
-  // these test performance of filter, character iteration/comparison 
-  BenchmarkInfo(name: "RemoveWhereFilterString", runFunction: run_RemoveWhereFilterString, tags: [.validation, .api], setUpFunction: buildWorkload),
-  BenchmarkInfo(name: "RemoveWhereQuadraticString", runFunction: run_RemoveWhereQuadraticString, tags: [.validation, .api], setUpFunction: buildWorkload),
+  BenchmarkInfo(name: "RemoveWhereMoveStrings",
+    runFunction: run_RemoveWhereMoveStrings, tags: t, setUpFunction: sss,
+    legacyFactor: 4),
+  BenchmarkInfo(name: "RemoveWhereMoveInts",
+    runFunction: run_RemoveWhereMoveInts, tags: t, setUpFunction: sis,
+    legacyFactor: 4),
+  BenchmarkInfo(name: "RemoveWhereSwapStrings",
+    runFunction: run_RemoveWhereSwapStrings, tags: t, setUpFunction: sss,
+    legacyFactor: 4),
+  BenchmarkInfo(name: "RemoveWhereSwapInts",
+    runFunction: run_RemoveWhereSwapInts, tags: t, setUpFunction: sis,
+    legacyFactor: 4),
+  // these test performance of filter, character iteration/comparison
+  BenchmarkInfo(name: "RemoveWhereFilterString",
+    runFunction: run_RemoveWhereFilterString, tags: t, setUpFunction: ss),
+  BenchmarkInfo(name: "RemoveWhereQuadraticString",
+    runFunction: run_RemoveWhereQuadraticString, tags: t, setUpFunction: ss),
 ]
 
 extension RangeReplaceableCollection {
@@ -109,17 +129,14 @@ func testSwap<C: RangeReplaceableCollection & MutableCollection>(workload: inout
   }
 }
 
-let n = 10_000
+let n = 2_500
 let strings = (0..<n).map({ "\($0): A long enough string to defeat the SSO" })
 let ints = Array(0..<n)
-let str = String(repeating: "A very long ASCII string.", count: n/50)
+let str = String(repeating: "A very long ASCII string.", count: 200)
 
-func buildWorkload() {
-  blackHole(strings)
-  blackHole(ints)
-  blackHole(str)
-}
-
+func sss() { blackHole(strings) }
+func sis() { blackHole(ints) }
+func ss() { blackHole(str) }
 
 @inline(never)
 func run_RemoveWhereQuadraticStrings(_ scale: Int) {
@@ -202,4 +219,3 @@ func run_RemoveWhereQuadraticString(_ scale: Int) {
     testQuadratic(workload: &workload)
   }
 }
-
